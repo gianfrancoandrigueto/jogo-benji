@@ -135,6 +135,24 @@ canvas{display:block;width:100vw;height:100vh}
 #dpad-d{bottom:0;left:47px}
 #dpad-l{top:47px;left:0}
 #dpad-r{top:47px;right:0}
+
+/* Online Lobby */
+#lobby{position:absolute;inset:0;z-index:22;display:none;flex-direction:column;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 30%,rgba(10,15,40,.97),rgba(5,5,16,.99))}
+#lobby .lt{font-size:28px;font-weight:900;color:#00ccff;text-shadow:0 0 20px rgba(0,200,255,.4);letter-spacing:2px}
+#lobby .ls{font-size:13px;color:#666;margin-top:6px;margin-bottom:24px}
+.lbtn{padding:14px 36px;margin:6px 0;border-radius:8px;background:rgba(0,200,255,.1);border:1px solid rgba(0,200,255,.2);color:#00ccff;font-weight:700;font-size:16px;cursor:pointer;transition:.2s;letter-spacing:1px}
+.lbtn:hover,.lbtn:active{background:rgba(0,200,255,.2);box-shadow:0 0 20px rgba(0,200,255,.15)}
+.lbtn.back{background:rgba(255,50,50,.1);border-color:rgba(255,50,50,.2);color:#f88;font-size:13px;margin-top:20px}
+#lobby-status{font-size:14px;color:#FFD700;margin-top:16px;min-height:20px;text-align:center}
+#room-code-display{font-size:42px;font-weight:900;color:#00ff88;letter-spacing:6px;margin:14px 0;text-shadow:0 0 25px rgba(0,255,136,.4);user-select:all;-webkit-user-select:all}
+#room-code-input{background:rgba(255,255,255,.08);border:2px solid rgba(0,200,255,.3);border-radius:8px;padding:12px 20px;font-size:24px;color:#fff;text-align:center;letter-spacing:4px;font-weight:700;width:240px;outline:none;font-family:monospace}
+#room-code-input:focus{border-color:#00ccff;box-shadow:0 0 15px rgba(0,200,255,.2)}
+#room-code-input::placeholder{color:#444;letter-spacing:2px;font-size:16px}
+.lcopy{font-size:10px;color:#555;cursor:pointer;margin-top:4px}
+.lcopy:active{color:#0cf}
+.ldot{display:inline-block;animation:ldot 1.4s infinite}
+.ldot:nth-child(2){animation-delay:.2s}.ldot:nth-child(3){animation-delay:.4s}
+@keyframes ldot{0%,80%,100%{opacity:.2}40%{opacity:1}}
 </style>
 </head>
 <body>
@@ -163,7 +181,8 @@ canvas{display:block;width:100vw;height:100vh}
  <div class="md"></div>
  <div class="mo sel" data-i="0">VS CPU</div>
  <div class="mo" data-i="1">VS LOCAL (2P)</div>
- <div class="mo" data-i="2">TRAINING MODE</div>
+ <div class="mo" data-i="2">VS ONLINE</div>
+ <div class="mo" data-i="3">TRAINING MODE</div>
  <div style="margin-top:16px;display:flex;gap:24px;justify-content:center;align-items:center">
   <div><div style="font-size:11px;color:#555;letter-spacing:1px;margin-bottom:4px">STAGE</div><div id="stage-sel" style="display:flex;gap:8px"><div class="mo sel" data-s="0" style="font-size:12px;padding:6px 14px">Wisteria Forest</div><div class="mo" data-s="1" style="font-size:12px;padding:6px 14px">Snowy Mountain</div></div></div>
   <div id="diff-wrap"><div style="font-size:11px;color:#555;letter-spacing:1px;margin-bottom:4px">CPU DIFFICULTY</div><div id="diff-sel" style="display:flex;gap:8px"><div class="mo" data-d="0" style="font-size:12px;padding:6px 14px">Easy</div><div class="mo sel" data-d="1" style="font-size:12px;padding:6px 14px">Medium</div><div class="mo" data-d="2" style="font-size:12px;padding:6px 14px">Hard</div></div></div>
@@ -183,6 +202,28 @@ canvas{display:block;width:100vw;height:100vh}
 
 <!-- Announce -->
 <div id="ann"><div class="bg"></div><div class="tx"><div class="b"></div><div class="s"></div></div></div>
+
+<!-- Online Lobby -->
+<div id="lobby">
+ <div class="lt">VS ONLINE</div>
+ <div class="ls">Luta contra um amigo pela internet</div>
+ <div id="lobby-create">
+  <div class="lbtn" id="lb-create">CRIAR SALA</div>
+  <div class="lbtn" id="lb-join">ENTRAR NA SALA</div>
+ </div>
+ <div id="lobby-host" style="display:none;text-align:center">
+  <div style="font-size:12px;color:#888;margin-bottom:4px">Envie este codigo para seu amigo:</div>
+  <div id="room-code-display">----</div>
+  <div class="lcopy" id="copy-code">Toque para copiar</div>
+ </div>
+ <div id="lobby-join" style="display:none;text-align:center">
+  <div style="font-size:12px;color:#888;margin-bottom:8px">Digite o codigo da sala:</div>
+  <input id="room-code-input" type="text" maxlength="6" placeholder="CODIGO" autocomplete="off" autocapitalize="characters">
+  <div style="margin-top:10px"><div class="lbtn" id="lb-connect">CONECTAR</div></div>
+ </div>
+ <div id="lobby-status"></div>
+ <div class="lbtn back" id="lb-back">VOLTAR</div>
+</div>
 
 <!-- Pause -->
 <div id="pau"><div><div class="pt">PAUSED</div><div class="ph">] = Frame Step &nbsp;|&nbsp; P = Resume &nbsp;|&nbsp; M = Move List</div></div></div>
@@ -207,6 +248,7 @@ canvas{display:block;width:100vw;height:100vh}
  <div class="tmbtn" id="tm-back" style="background:rgba(255,50,50,.15);border-color:rgba(255,50,50,.2);color:#f88">Back</div>
 </div>
 
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script type="importmap">
 {"imports":{"three":"https://unpkg.com/three@0.171.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.171.0/examples/jsm/"}}
 </script>
@@ -2702,6 +2744,172 @@ function uScene(){
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ONLINE MULTIPLAYER (PeerJS WebRTC)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const NET={
+    peer:null,conn:null,isHost:false,connected:false,
+    roomCode:'',remoteInput:{},localInput:{},
+    // P2 keys that remote player controls
+    P2_KEYS:['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Numpad1','Numpad2','Numpad3'],
+    P1_KEYS:['KeyA','KeyD','KeyW','KeyS','KeyJ','KeyK','KeyL'],
+};
+
+function netGenCode(){
+    const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let c='';for(let i=0;i<5;i++)c+=chars[Math.random()*chars.length|0];
+    return c;
+}
+
+function netSetStatus(msg,color='#FFD700'){
+    const el=document.getElementById('lobby-status');
+    el.innerHTML=msg;el.style.color=color;
+}
+
+function netCreateRoom(){
+    NET.isHost=true;
+    NET.roomCode=netGenCode();
+    document.getElementById('lobby-create').style.display='none';
+    document.getElementById('lobby-host').style.display='';
+    document.getElementById('room-code-display').textContent=NET.roomCode;
+    netSetStatus('Aguardando oponente<span class="ldot">.</span><span class="ldot">.</span><span class="ldot">.</span>');
+
+    NET.peer=new Peer('dsf-'+NET.roomCode,{debug:0});
+    NET.peer.on('open',()=>{
+        netSetStatus('Sala criada! Aguardando<span class="ldot">.</span><span class="ldot">.</span><span class="ldot">.</span>');
+    });
+    NET.peer.on('connection',conn=>{
+        NET.conn=conn;
+        netSetupConn();
+    });
+    NET.peer.on('error',err=>{
+        if(err.type==='unavailable-id'){
+            NET.roomCode=netGenCode();
+            document.getElementById('room-code-display').textContent=NET.roomCode;
+            NET.peer.destroy();
+            NET.peer=new Peer('dsf-'+NET.roomCode,{debug:0});
+            NET.peer.on('open',()=>netSetStatus('Sala criada! Aguardando<span class="ldot">.</span><span class="ldot">.</span><span class="ldot">.</span>'));
+            NET.peer.on('connection',conn=>{NET.conn=conn;netSetupConn()});
+        }else{
+            netSetStatus('Erro: '+err.type,'#ff4444');
+        }
+    });
+}
+
+function netJoinRoom(){
+    document.getElementById('lobby-create').style.display='none';
+    document.getElementById('lobby-join').style.display='';
+    netSetStatus('Digite o codigo e clique CONECTAR');
+    setTimeout(()=>document.getElementById('room-code-input').focus(),100);
+}
+
+function netConnect(){
+    const code=document.getElementById('room-code-input').value.trim().toUpperCase();
+    if(code.length<4){netSetStatus('Codigo muito curto!','#ff4444');return}
+    NET.isHost=false;
+    NET.roomCode=code;
+    netSetStatus('Conectando<span class="ldot">.</span><span class="ldot">.</span><span class="ldot">.</span>');
+
+    NET.peer=new Peer(undefined,{debug:0});
+    NET.peer.on('open',()=>{
+        NET.conn=NET.peer.connect('dsf-'+code,{reliable:true});
+        NET.conn.on('open',()=>netSetupConn());
+        NET.conn.on('error',()=>netSetStatus('Falha ao conectar!','#ff4444'));
+    });
+    NET.peer.on('error',err=>{
+        netSetStatus('Erro: '+err.type+'. Sala nao encontrada?','#ff4444');
+    });
+}
+
+function netSetupConn(){
+    NET.connected=true;
+    netSetStatus('Conectado! Iniciando...','#00ff88');
+    NET.conn.on('data',data=>{
+        if(data.type==='input'){
+            NET.remoteInput=data.keys;
+        }else if(data.type==='selP1'){
+            // Host confirmed P1 selection, guest can now pick P2
+            selP1=data.char;sPh=1;sCur=selP1===9?0:9;
+            document.getElementById('stit').textContent='P2 - SELECIONE SEU PERSONAGEM';
+            uSel();
+        }else if(data.type==='start'){
+            // Guest sends start signal with char selections
+            selP1=data.p1;selP2=data.p2;
+            buildStage(data.stage);curStage=data.stage;
+            document.getElementById('sel').style.display='none';
+            document.getElementById('hud').style.display='block';
+            gMode=1;initFight();gs=GS.FIGHT;rNum=1;w1=0;w2=0;
+        }
+    });
+    NET.conn.on('close',()=>{
+        NET.connected=false;
+        netSetStatus('Oponente desconectou!','#ff4444');
+    });
+
+    // After 1s start char select (host controls flow)
+    setTimeout(()=>{
+        document.getElementById('lobby').style.display='none';
+        document.getElementById('sel').style.display='block';
+        gMode=1;gs=GS.SEL;sCur=0;sPh=0;uSel();
+        // Guest skips P1 selection (host picks P1, guest picks P2)
+        if(!NET.isHost){
+            document.getElementById('stit').textContent='AGUARDANDO P1...';
+        }
+    },800);
+}
+
+function netSendInput(){
+    if(!NET.conn||!NET.connected)return;
+    // Send local keys relevant to our player
+    const keys={};
+    const myKeys=NET.isHost?NET.P1_KEYS:NET.P2_KEYS;
+    myKeys.forEach(k=>{if(K[k])keys[k]=true});
+    try{NET.conn.send({type:'input',keys})}catch(e){}
+}
+
+function netApplyRemote(){
+    if(!NET.connected)return;
+    // Apply remote input to the opponent's keys
+    const theirKeys=NET.isHost?NET.P2_KEYS:NET.P1_KEYS;
+    theirKeys.forEach(k=>{K[k]=!!NET.remoteInput[k]});
+}
+
+function netSendStart(p1,p2,stage){
+    if(!NET.conn||!NET.connected)return;
+    try{NET.conn.send({type:'start',p1,p2,stage})}catch(e){}
+}
+
+function netDisconnect(){
+    if(NET.conn)try{NET.conn.close()}catch(e){}
+    if(NET.peer)try{NET.peer.destroy()}catch(e){}
+    NET.conn=null;NET.peer=null;NET.connected=false;NET.remoteInput={};
+}
+
+// Lobby button handlers
+document.getElementById('lb-create').addEventListener('click',netCreateRoom);
+document.getElementById('lb-join').addEventListener('click',netJoinRoom);
+document.getElementById('lb-connect').addEventListener('click',netConnect);
+document.getElementById('room-code-input').addEventListener('keydown',e=>{if(e.key==='Enter')netConnect()});
+document.getElementById('copy-code').addEventListener('click',()=>{
+    navigator.clipboard?.writeText(NET.roomCode).then(()=>{
+        document.getElementById('copy-code').textContent='Copiado!';
+        setTimeout(()=>{document.getElementById('copy-code').textContent='Toque para copiar'},1500);
+    });
+});
+document.getElementById('lb-back').addEventListener('click',()=>{
+    netDisconnect();
+    document.getElementById('lobby').style.display='none';
+    document.getElementById('menu').style.display='flex';
+});
+
+// Touch support for lobby
+if(isMobile){
+    ['lb-create','lb-join','lb-connect','lb-back','copy-code'].forEach(id=>{
+        const el=document.getElementById(id);
+        el.addEventListener('touchstart',e=>{e.preventDefault();el.click()},{passive:false});
+    });
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MAIN LOOP
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 let lt=0,acc=0;
@@ -2711,27 +2919,69 @@ function loop(ts){
         fc++;
         switch(gs){
             case GS.MENU:
-                if(pr('KeyW')||pr('ArrowUp')){mCur=(mCur-1+3)%3;document.querySelectorAll('#menu > .mo').forEach((o,i)=>o.classList.toggle('sel',i===mCur));SFX.select()}
-                if(pr('KeyS')||pr('ArrowDown')){mCur=(mCur+1)%3;document.querySelectorAll('#menu > .mo').forEach((o,i)=>o.classList.toggle('sel',i===mCur));SFX.select()}
+                if(pr('KeyW')||pr('ArrowUp')){mCur=(mCur-1+4)%4;document.querySelectorAll('#menu > .mo').forEach((o,i)=>o.classList.toggle('sel',i===mCur));SFX.select()}
+                if(pr('KeyS')||pr('ArrowDown')){mCur=(mCur+1)%4;document.querySelectorAll('#menu > .mo').forEach((o,i)=>o.classList.toggle('sel',i===mCur));SFX.select()}
                 if(pr('KeyA')||pr('ArrowLeft')){curStage=(curStage-1+STAGES.length)%STAGES.length;document.querySelectorAll('[data-s]').forEach((o,i)=>o.classList.toggle('sel',i===curStage));buildStage(curStage);SFX.select()}
                 if(pr('KeyD')||pr('ArrowRight')){curStage=(curStage+1)%STAGES.length;document.querySelectorAll('[data-s]').forEach((o,i)=>o.classList.toggle('sel',i===curStage));buildStage(curStage);SFX.select()}
                 if(pr('KeyQ')){aiDiff=(aiDiff-1+3)%3;document.querySelectorAll('[data-d]').forEach((o,i)=>o.classList.toggle('sel',i===aiDiff));SFX.select()}
                 if(pr('KeyE')){aiDiff=(aiDiff+1)%3;document.querySelectorAll('[data-d]').forEach((o,i)=>o.classList.toggle('sel',i===aiDiff));SFX.select()}
-                if(pr('KeyJ')||pr('Enter')){initAudio();SFX.confirm();gMode=mCur;gs=GS.SEL;sCur=0;sPh=0;document.getElementById('menu').style.display='none';document.getElementById('sel').style.display='block';uSel()}
+                if(pr('KeyJ')||pr('Enter')){
+                    initAudio();SFX.confirm();
+                    if(mCur===2){
+                        // VS ONLINE - show lobby
+                        document.getElementById('menu').style.display='none';
+                        document.getElementById('lobby').style.display='flex';
+                        document.getElementById('lobby-create').style.display='';
+                        document.getElementById('lobby-host').style.display='none';
+                        document.getElementById('lobby-join').style.display='none';
+                        document.getElementById('lobby-status').textContent='';
+                    }else{
+                        gMode=mCur>2?mCur-1:mCur; // 0=cpu,1=local,2=training (skip online)
+                        gs=GS.SEL;sCur=0;sPh=0;
+                        document.getElementById('menu').style.display='none';
+                        document.getElementById('sel').style.display='block';uSel();
+                    }
+                }
                 // Show/hide difficulty based on mode
                 document.getElementById('diff-wrap').style.opacity=mCur===0?'1':'0.3';
                 break;
             case GS.SEL:
-                if(pr('KeyA')||pr('ArrowLeft')){sCur=(sCur-1+10)%10;uSel();SFX.select()}
-                if(pr('KeyD')||pr('ArrowRight')){sCur=(sCur+1)%10;uSel();SFX.select()}
-                if(pr('KeyW')||pr('ArrowUp')){sCur=(sCur-5+10)%10;uSel();SFX.select()}
-                if(pr('KeyS')||pr('ArrowDown')){sCur=(sCur+5)%10;uSel();SFX.select()}
+                // Online: only current phase player can navigate
+                const canNav=!NET.connected||(NET.isHost&&sPh===0)||(!NET.isHost&&sPh===1);
+                if(canNav){
+                    if(pr('KeyA')||pr('ArrowLeft')){sCur=(sCur-1+10)%10;uSel();SFX.select()}
+                    if(pr('KeyD')||pr('ArrowRight')){sCur=(sCur+1)%10;uSel();SFX.select()}
+                    if(pr('KeyW')||pr('ArrowUp')){sCur=(sCur-5+10)%10;uSel();SFX.select()}
+                    if(pr('KeyS')||pr('ArrowDown')){sCur=(sCur+5)%10;uSel();SFX.select()}
+                }
                 if(pr('KeyJ')||pr('Enter')){
                     SFX.confirm();
-                    if(sPh===0){selP1=sCur;sPh=1;sCur=selP1===9?0:9;uSel()}
-                    else{selP2=sCur;document.getElementById('sel').style.display='none';document.getElementById('hud').style.display='block';initFight();tr.on=gMode===2;gs=GS.FIGHT;rNum=1;w1=0;w2=0}
+                    if(NET.connected){
+                        // Online: host picks P1, then guest picks P2
+                        if(NET.isHost&&sPh===0){
+                            selP1=sCur;sPh=1;sCur=selP1===9?0:9;
+                            document.getElementById('stit').textContent='AGUARDANDO P2...';
+                            uSel();
+                            try{NET.conn.send({type:'selP1',char:selP1})}catch(e){}
+                        }else if(!NET.isHost&&sPh===1){
+                            selP2=sCur;
+                            // Guest confirms P2, send start to both
+                            document.getElementById('sel').style.display='none';
+                            document.getElementById('hud').style.display='block';
+                            buildStage(curStage);
+                            netSendStart(selP1,selP2,curStage);
+                            gMode=1;initFight();gs=GS.FIGHT;rNum=1;w1=0;w2=0;
+                        }
+                    }else{
+                        if(sPh===0){selP1=sCur;sPh=1;sCur=selP1===9?0:9;uSel()}
+                        else{selP2=sCur;document.getElementById('sel').style.display='none';document.getElementById('hud').style.display='block';initFight();tr.on=gMode===2;gs=GS.FIGHT;rNum=1;w1=0;w2=0}
+                    }
                 }
-                if(pr('KeyK')||pr('Escape')){if(sPh===1){sPh=0;uSel()}else{gs=GS.MENU;document.getElementById('sel').style.display='none';document.getElementById('menu').style.display='flex'}}
+                if(pr('KeyK')||pr('Escape')){
+                    if(NET.connected){netDisconnect();document.getElementById('sel').style.display='none';document.getElementById('menu').style.display='flex';gs=GS.MENU}
+                    else if(sPh===1){sPh=0;uSel()}
+                    else{gs=GS.MENU;document.getElementById('sel').style.display='none';document.getElementById('menu').style.display='flex'}
+                }
                 break;
             case GS.FIGHT:
                 // Countdown freezes gameplay
@@ -2748,6 +2998,8 @@ function loop(ts){
                 if(sloMo>0){sloMo--;break}
                 rep.rf();
                 if(aiController&&!tr.on)aiController.update(p1);
+                // Online: sync inputs before update
+                if(NET.connected){netSendInput();netApplyRemote()}
                 p1.update(p2);p2.update(p1);tr.upd(p1,p2);
                 if(tr.hb){p1.drawHB();p2.drawHB()}else{p1.rmHB();p2.rmHB()}
                 if(!tr.on){rTimer--;if(rTimer<=0||p1.hp<=0||p2.hp<=0){
@@ -2772,7 +3024,7 @@ function loop(ts){
             case GS.MEND:
                 updateVictoryPose();
                 meTimer--;
-                if(pr('KeyJ')||pr('Enter')||meTimer<=0){gs=GS.MENU;document.getElementById('menu').style.display='flex';document.getElementById('hud').style.display='none';if(p1)p1.destroy();if(p2)p2.destroy();p1=null;p2=null;hideMoveList()}
+                if(pr('KeyJ')||pr('Enter')||meTimer<=0){gs=GS.MENU;document.getElementById('menu').style.display='flex';document.getElementById('hud').style.display='none';if(p1)p1.destroy();if(p2)p2.destroy();p1=null;p2=null;hideMoveList();if(NET.connected)netDisconnect()}
                 break;
         }
         for(const k in K)KP[k]=K[k];
