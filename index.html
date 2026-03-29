@@ -3011,55 +3011,57 @@ function netSetupConn(){
 }
 
 // Key mapping: both players use WASD+JKL locally
-// We send P1-style keys and remap on receive
 const KEY_MAP_P1_TO_P2={
     'KeyA':'ArrowLeft','KeyD':'ArrowRight','KeyW':'ArrowUp','KeyS':'ArrowDown',
     'KeyJ':'Numpad1','KeyK':'Numpad2','KeyL':'Numpad3'
 };
-const KEY_MAP_P2_TO_P1={
-    'ArrowLeft':'KeyA','ArrowRight':'KeyD','ArrowUp':'KeyW','ArrowDown':'KeyS',
-    'Numpad1':'KeyJ','Numpad2':'KeyK','Numpad3':'KeyL'
-};
+
+// Snapshot of local raw input before any remapping
+let netLocalSnapshot={};
+
+function netCaptureLocal(){
+    if(!NET.connected)return;
+    // Save raw local WASD+JKL state BEFORE any remapping
+    netLocalSnapshot={};
+    NET.P1_KEYS.forEach(k=>{if(K[k])netLocalSnapshot[k]=true});
+}
 
 function netSendInput(){
     if(!NET.conn||!NET.connected)return;
-    // Always send P1 keys (WASD+JKL) - both players use same local controls
-    const keys={};
-    NET.P1_KEYS.forEach(k=>{if(K[k])keys[k]=true});
-    try{NET.conn.send({type:'input',keys})}catch(e){}
+    // Send the captured raw local snapshot (not current K which may be remapped)
+    try{NET.conn.send({type:'input',keys:netLocalSnapshot})}catch(e){}
 }
 
-function netApplyRemote(){
+function netApplyInputs(){
     if(!NET.connected)return;
-    // Remote sent P1-style keys, we remap to the correct player slot
+
     if(NET.isHost){
-        // Host receives guest input -> map to P2 keys (Arrows/Numpad)
-        NET.P2_KEYS.forEach(k=>{K[k]=false}); // clear P2 keys first
+        // HOST side:
+        // P1 = host's own WASD+JKL (already in K from keyboard/touch, untouched)
+        // P2 = guest's remote input, remap from WASD+JKL to Arrow+Numpad
+        NET.P2_KEYS.forEach(k=>{K[k]=false});
         NET.P1_KEYS.forEach(k=>{
             const p2k=KEY_MAP_P1_TO_P2[k];
             if(p2k)K[p2k]=!!NET.remoteInput[k];
         });
     }else{
-        // Guest receives host input -> map to P1 keys (WASD/JKL)
-        // But guest's own P1 keys control P2, so host's input goes to P1
-        // We need to: clear P1 keys from remote, apply host's P1 keys
-        // Guest local WASD = P2 (remapped below), Host remote = P1 (direct)
-        NET.P1_KEYS.forEach(k=>{K[k]=!!NET.remoteInput[k]});
-    }
-}
+        // GUEST side:
+        // P1 = host's remote input, apply as WASD+JKL directly
+        // P2 = guest's own input, remap own WASD+JKL to Arrow+Numpad
 
-// Guest: remap own WASD+JKL to P2 keys each frame before game reads input
-function netRemapGuestLocal(){
-    if(!NET.connected||NET.isHost)return;
-    // Save guest's local P1 presses, map them to P2 keys
-    const local={};
-    NET.P1_KEYS.forEach(k=>{local[k]=!!K[k]});
-    // Don't clear P1 keys here - netApplyRemote sets them from host
-    // Set P2 keys from guest's local input
-    NET.P1_KEYS.forEach(k=>{
-        const p2k=KEY_MAP_P1_TO_P2[k];
-        if(p2k)K[p2k]=!!local[k];
-    });
+        // First: save guest's local WASD+JKL (from snapshot)
+        const myInput={...netLocalSnapshot};
+
+        // Set P1 keys from host's remote input
+        NET.P1_KEYS.forEach(k=>{K[k]=!!NET.remoteInput[k]});
+
+        // Set P2 keys from guest's local input
+        NET.P2_KEYS.forEach(k=>{K[k]=false});
+        NET.P1_KEYS.forEach(k=>{
+            const p2k=KEY_MAP_P1_TO_P2[k];
+            if(p2k)K[p2k]=!!myInput[k];
+        });
+    }
 }
 
 function netSendStart(p1,p2,stage){
@@ -3187,8 +3189,8 @@ function loop(ts){
                 if(sloMo>0){sloMo--;break}
                 rep.rf();
                 if(aiController&&!tr.on)aiController.update(p1);
-                // Online: sync inputs before update
-                if(NET.connected){netRemapGuestLocal();netSendInput();netApplyRemote()}
+                // Online: capture local input, send it, then apply both sides
+                if(NET.connected){netCaptureLocal();netSendInput();netApplyInputs()}
                 p1.update(p2);p2.update(p1);tr.upd(p1,p2);
                 if(tr.hb){p1.drawHB();p2.drawHB()}else{p1.rmHB();p2.rmHB()}
                 if(!tr.on){rTimer--;if(rTimer<=0||p1.hp<=0||p2.hp<=0){
