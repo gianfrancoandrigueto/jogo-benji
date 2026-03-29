@@ -1720,6 +1720,9 @@ class Fighter{
     }
     uMdl(){
         this.mdl.position.x=this.x;this.mdl.position.y=this.y;this.mdl.scale.x=this.fac;
+        // Face opponent: slight Y rotation toward the other fighter
+        const facingAngle=this.fac>0?-0.35:0.35;
+        this.mdl.rotation.y+=(facingAngle-this.mdl.rotation.y)*0.12;
         const j=this.j,t=this.af*0.05,S=this.ch.sc||1;
         const L=0.15; // lerp speed for smooth transitions
 
@@ -1732,10 +1735,17 @@ class Fighter{
 
         switch(this.st){
             case'idle':
-                tgt.chestX=Math.sin(t)*0.02;
-                tgt.hipsY=0.96*S+Math.sin(t)*0.008;
-                tgt.shLx=Math.sin(t*0.8)*0.05;
-                tgt.shRx=-Math.sin(t*0.8)*0.05;
+                // Fighting stance bounce with personality
+                tgt.chestX=Math.sin(t)*0.03;
+                tgt.hipsY=0.96*S+Math.sin(t*1.2)*0.012;
+                tgt.shLx=Math.sin(t*0.8)*0.08-0.15; // guard position
+                tgt.shRx=-Math.sin(t*0.8)*0.08-0.15;
+                tgt.elLx=-0.4+Math.sin(t*0.6)*0.05; // fists up
+                tgt.elRx=-0.4-Math.sin(t*0.6)*0.05;
+                tgt.hpLx=Math.sin(t*0.5)*0.03;
+                tgt.hpRx=-Math.sin(t*0.5)*0.03;
+                // Subtle side-to-side weight shift
+                tgt.torsoY=Math.sin(t*0.4)*0.04;
                 // Landing squash
                 if(this.landSquash>0){
                     this.landSquash--;
@@ -1784,9 +1794,37 @@ class Fighter{
                     // Stretch: torso wider/shorter during strike
                     if(j.chest)j.chest.scale.lerp(new THREE.Vector3(1.08,0.92,1.03),0.25);
                 }else{
-                    // Recovery: return to neutral
+                    // Recovery: mini celebration if hit connected!
                     const rp=1-((this.mf-this.cm.su-this.cm.ac)/this.cm.rc);
-                    tgt.shRx=-0.5*rp;tgt.elRx=-0.4*rp;tgt.torsoY=0.15*rp;
+                    if(this.hitA){
+                        // Funny victory poses during recovery
+                        const rf=this.mf-this.cm.su-this.cm.ac;
+                        const dance=this.ci%4; // different dance per character index
+                        if(dance===0){
+                            // Fist pump
+                            tgt.shRx=-2.0+Math.sin(rf*0.8)*0.3;tgt.elRx=-0.2;
+                            tgt.shLx=0.3;tgt.torsoY=-0.1;
+                            tgt.hipsY=(0.96+Math.sin(rf*0.6)*0.03)*S;
+                        }else if(dance===1){
+                            // Wiggle dance
+                            tgt.torsoY=Math.sin(rf*1.0)*0.3;
+                            tgt.hpLx=Math.sin(rf*0.8)*0.2;tgt.hpRx=-Math.sin(rf*0.8)*0.2;
+                            tgt.shLx=Math.sin(rf*0.6)*0.4;tgt.shRx=-Math.sin(rf*0.6)*0.4;
+                            tgt.hipsY=(0.94+Math.abs(Math.sin(rf*0.5))*0.04)*S;
+                        }else if(dance===2){
+                            // Dab
+                            tgt.shRx=-1.8;tgt.elRx=0.2;
+                            tgt.shLx=0.8;tgt.elLx=-1.5;
+                            tgt.headX=0.3;tgt.torsoY=0.2;
+                        }else{
+                            // Arm cross flex
+                            tgt.shLx=-0.6;tgt.shRx=-0.6;
+                            tgt.elLx=-1.8;tgt.elRx=-1.8;
+                            tgt.torsoX=-0.08;tgt.chestX=0.05;
+                        }
+                    }else{
+                        tgt.shRx=-0.5*rp;tgt.elRx=-0.4*rp;tgt.torsoY=0.15*rp;
+                    }
                     if(j.chest)j.chest.scale.lerp(new THREE.Vector3(1,1,1),0.15);
                 }
                 // Weapon trail during active frames
@@ -1805,47 +1843,120 @@ class Fighter{
                     }
                 }
                 break;}
-            case'hitstun':
-                tgt.torsoX=-0.2;tgt.chestX=-0.15;
-                tgt.hipsY=0.9*S;tgt.headX=-0.25;
-                tgt.shLx=0.3;tgt.shRx=0.3;
-                // Stagger side to side
-                tgt.torsoY=Math.sin(this.sf*0.5)*0.1;
-                break;
-            case'blockstun':
-                tgt.torsoX=-0.1;tgt.torsoY=-0.05;
-                tgt.shLx=-0.8;tgt.shRx=-0.6;
-                tgt.elLx=-1;tgt.elRx=-0.5;
-                break;
-            case'knockdown':
-                tgt.torsoX=-0.8-Math.min(this.sf*0.02,0.4);
-                tgt.headX=-0.3;
-                tgt.hpLx=0.3;tgt.hpRx=0.3;
-                tgt.shLx=0.5;tgt.shRx=0.5;
-                if(this.sf===1)spawnDust(this.x,0.01,0,8,0.4,0.02);
-                break;
-            case'dash':
-                // Leaning into dash direction
-                tgt.torsoX=this.dashDir===this.fac?-0.15:0.1;
-                tgt.torsoY=this.dashDir===this.fac?0.2:-0.15;
-                tgt.hpLx=this.dashDir===this.fac?-0.4:0.2;
-                tgt.hpRx=this.dashDir===this.fac?0.3:-0.3;
-                tgt.shLx=this.dashDir===this.fac?0.4:-0.3;
-                tgt.shRx=this.dashDir===this.fac?-0.3:0.3;
-                // Afterimage ghost trail every 2 frames
-                if(this.sf%2===0)spawnGhost(this,this.ch.vfx);
-                break;
-            case'throw':
-                // Grab animation
-                if(this.mf<8){
-                    tgt.shLx=-0.8;tgt.shRx=-0.8;tgt.elLx=-0.5;tgt.elRx=-0.5;
-                    tgt.torsoY=0.2;tgt.torsoX=-0.1;
+            case'hitstun':{
+                // Funny stagger reactions based on frame count
+                const hf=this.sf;
+                const react=hf%40;
+                if(react<8){
+                    // Chicken flap: arms flail wildly
+                    tgt.shLx=Math.sin(hf*1.2)*1.5;tgt.shRx=-Math.sin(hf*1.2)*1.5;
+                    tgt.elLx=Math.cos(hf*1.5)*0.8;tgt.elRx=-Math.cos(hf*1.5)*0.8;
+                    tgt.torsoX=-0.15;tgt.hipsY=0.88*S;
+                    tgt.headX=Math.sin(hf*0.8)*0.3;
+                }else if(react<16){
+                    // Dizzy wobble: spin head, wobbly legs
+                    tgt.headX=Math.sin(hf*0.6)*0.4;
+                    tgt.torsoY=Math.sin(hf*0.4)*0.35;
+                    tgt.hpLx=Math.sin(hf*0.7)*0.3;tgt.hpRx=-Math.sin(hf*0.7)*0.3;
+                    tgt.knLx=Math.abs(Math.sin(hf*0.5))*0.4;tgt.knRx=Math.abs(Math.cos(hf*0.5))*0.4;
+                    tgt.hipsY=0.85*S+Math.sin(hf*0.3)*0.05*S;
+                }else if(react<24){
+                    // Moonwalk stumble: lean way back
+                    tgt.torsoX=0.4+Math.sin(hf*0.3)*0.15;
+                    tgt.shLx=-0.8;tgt.shRx=-0.8;
+                    tgt.hpLx=-0.4;tgt.hpRx=0.2;
+                    tgt.knLx=0.6;tgt.knRx=0.3;
+                    tgt.headX=-0.4;
+                    tgt.hipsY=0.8*S;
                 }else{
-                    // Toss
-                    tgt.shLx=0.5;tgt.shRx=0.6;tgt.torsoY=-0.1;tgt.torsoX=0.15;
-                    tgt.hpLx=-0.2;tgt.hpRx=0.3;
+                    // Noodle legs: wiggle everything
+                    tgt.hpLx=Math.sin(hf*0.9)*0.5;tgt.hpRx=Math.cos(hf*0.9)*0.5;
+                    tgt.knLx=Math.abs(Math.sin(hf*1.1))*0.6;tgt.knRx=Math.abs(Math.cos(hf*1.1))*0.6;
+                    tgt.shLx=Math.sin(hf*0.7)*0.6;tgt.shRx=Math.cos(hf*0.7)*0.6;
+                    tgt.torsoY=Math.sin(hf*0.5)*0.25;
+                    tgt.hipsY=0.82*S+Math.sin(hf*0.8)*0.06*S;
+                    tgt.headX=Math.sin(hf*0.6)*0.2;
                 }
-                break;
+                break;}
+            case'blockstun':{
+                // Funny block: jazz hands / panicked guard
+                const bf=this.sf;
+                tgt.torsoX=-0.12;tgt.torsoY=Math.sin(bf*0.6)*0.08;
+                tgt.shLx=-1.0+Math.sin(bf*1.2)*0.2;tgt.shRx=-0.7+Math.cos(bf*1.2)*0.2;
+                tgt.elLx=-1.2+Math.sin(bf*1.5)*0.3;tgt.elRx=-0.8+Math.cos(bf*1.5)*0.3;
+                tgt.hipsY=0.9*S+Math.sin(bf*0.8)*0.02*S;
+                break;}
+            case'knockdown':{
+                // Funny knockdown: tumble and flail
+                const kf=this.sf;
+                if(kf<10){
+                    // Dramatic fall with spinning arms
+                    tgt.torsoX=-0.5-kf*0.08;
+                    tgt.shLx=Math.sin(kf*1.5)*1.2;tgt.shRx=-Math.sin(kf*1.5)*1.2;
+                    tgt.elLx=Math.cos(kf*1.8)*0.8;tgt.elRx=-Math.cos(kf*1.8)*0.8;
+                    tgt.hpLx=0.3+Math.sin(kf*0.5)*0.2;tgt.hpRx=0.3-Math.sin(kf*0.5)*0.2;
+                    tgt.headX=-0.2-kf*0.05;
+                }else if(kf<20){
+                    // On the ground twitching
+                    tgt.torsoX=-1.2;tgt.headX=-0.5;
+                    tgt.shLx=0.5+Math.sin(kf*2)*0.3;tgt.shRx=0.5-Math.sin(kf*2)*0.3;
+                    tgt.hpLx=0.4+Math.sin(kf*1.5)*0.15;tgt.hpRx=0.4;
+                    tgt.knLx=Math.sin(kf*2)*0.3;tgt.knRx=Math.cos(kf*2)*0.3;
+                }else{
+                    // Slowly trying to get up, legs wobbling
+                    const getUp=Math.min(1,(kf-20)/15);
+                    tgt.torsoX=-1.2+getUp*1.0;
+                    tgt.hpLx=0.4-getUp*0.3;tgt.hpRx=0.4-getUp*0.3;
+                    tgt.shLx=0.3-getUp*0.2;tgt.shRx=0.3-getUp*0.2;
+                    tgt.knLx=Math.sin(kf*0.8)*0.2*(1-getUp);tgt.knRx=Math.cos(kf*0.8)*0.2*(1-getUp);
+                    tgt.headX=-0.5+getUp*0.4;
+                }
+                if(kf===1)spawnDust(this.x,0.01,0,8,0.4,0.02);
+                break;}
+            case'dash':{
+                // Naruto run or silly dash based on character
+                const df=this.sf;
+                if(this.dashDir===this.fac){
+                    // Forward dash: Naruto run (arms back, head forward)
+                    tgt.torsoX=-0.25;tgt.torsoY=0.15;
+                    tgt.shLx=0.8+Math.sin(df*0.8)*0.15;tgt.shRx=0.8-Math.sin(df*0.8)*0.15;
+                    tgt.elLx=0.2;tgt.elRx=0.2;
+                    tgt.headX=-0.2;
+                    tgt.hpLx=Math.sin(df*1.5)*0.4;tgt.hpRx=-Math.sin(df*1.5)*0.4;
+                    tgt.knLx=Math.max(0,Math.sin(df*1.5+0.5))*0.3;tgt.knRx=Math.max(0,-Math.sin(df*1.5+0.5))*0.3;
+                }else{
+                    // Backdash: panicked stumble backwards
+                    tgt.torsoX=0.2;tgt.torsoY=-0.1;
+                    tgt.shLx=-1.2+Math.sin(df*1.2)*0.3;tgt.shRx=-1.2-Math.sin(df*1.2)*0.3;
+                    tgt.hpLx=-0.3+Math.sin(df*1.0)*0.2;tgt.hpRx=0.2;
+                    tgt.headX=0.2;
+                }
+                // Afterimage ghost trail every 2 frames
+                if(df%2===0)spawnGhost(this,this.ch.vfx);
+                break;}
+            case'throw':{
+                // Funny grab and yeet
+                const tf=this.mf;
+                if(tf<8){
+                    // Grabbing: desperate bear hug
+                    tgt.shLx=-1.0-Math.sin(tf*0.8)*0.15;tgt.shRx=-1.0+Math.sin(tf*0.8)*0.15;
+                    tgt.elLx=-0.8;tgt.elRx=-0.8;
+                    tgt.torsoY=0.25;tgt.torsoX=-0.15;
+                    tgt.hipsY=(0.92+Math.sin(tf*1.0)*0.02)*S;
+                }else if(tf<14){
+                    // Wind up: dramatic overhead lift
+                    tgt.shLx=-2.0;tgt.shRx=-2.0;
+                    tgt.torsoX=-0.2;tgt.hipsY=1.02*S;
+                    tgt.hpLx=-0.2;tgt.hpRx=-0.2;
+                    tgt.knLx=0.2;tgt.knRx=0.2;
+                }else{
+                    // YEET: full body throw motion
+                    tgt.shLx=0.8;tgt.shRx=0.8;tgt.elLx=0.3;tgt.elRx=0.3;
+                    tgt.torsoY=-0.3;tgt.torsoX=0.3;
+                    tgt.hpLx=-0.3;tgt.hpRx=0.4;
+                    tgt.hipsY=0.88*S;
+                }
+                break;}
         }
 
         // Lerp all joints toward targets for smooth motion
@@ -2630,14 +2741,50 @@ function startVictoryPose(winner){
 function updateVictoryPose(){
     if(victoryPoseTimer<=0)return;
     victoryPoseTimer--;
-    // Winner does a pose (arms raised)
+    const vf=180-victoryPoseTimer; // frames since victory
     const winner=p1&&p1.hp>0?p1:p2;
+    const loser=winner===p1?p2:p1;
     if(winner&&winner.j){
         const j=winner.j;
-        if(j.shL)j.shL.rotation.x+=((-1.2)-j.shL.rotation.x)*0.1;
-        if(j.shR)j.shR.rotation.x+=((-1.2)-j.shR.rotation.x)*0.1;
-        if(j.elL)j.elL.rotation.x+=(0-j.elL.rotation.x)*0.1;
-        if(j.elR)j.elR.rotation.x+=(0-j.elR.rotation.x)*0.1;
+        // Funny victory dance: alternating moves
+        const phase=vf%60;
+        if(phase<15){
+            // Arms up celebration
+            if(j.shL)j.shL.rotation.x+=((-2.0)-j.shL.rotation.x)*0.15;
+            if(j.shR)j.shR.rotation.x+=((-2.0)-j.shR.rotation.x)*0.15;
+            if(j.hips)j.hips.position.y+=(1.05*(winner.ch.sc||1)-j.hips.position.y)*0.1;
+        }else if(phase<30){
+            // Disco point
+            if(j.shL)j.shL.rotation.x+=(0.5-j.shL.rotation.x)*0.15;
+            if(j.shR)j.shR.rotation.x+=((-1.8)-j.shR.rotation.x)*0.15;
+            if(j.elR)j.elR.rotation.x+=(0-j.elR.rotation.x)*0.15;
+            if(j.torso)j.torso.rotation.y+=(0.3-j.torso.rotation.y)*0.1;
+        }else if(phase<45){
+            // Hip shake
+            if(j.shL)j.shL.rotation.x+=((-0.8)-j.shL.rotation.x)*0.15;
+            if(j.shR)j.shR.rotation.x+=((-0.8)-j.shR.rotation.x)*0.15;
+            if(j.elL)j.elL.rotation.x+=((-1.5)-j.elL.rotation.x)*0.15;
+            if(j.elR)j.elR.rotation.x+=((-1.5)-j.elR.rotation.x)*0.15;
+            if(j.torso)j.torso.rotation.y+=(Math.sin(vf*0.4)*0.35-j.torso.rotation.y)*0.12;
+            if(j.hpL)j.hpL.rotation.x+=(Math.sin(vf*0.5)*0.2-j.hpL.rotation.x)*0.1;
+            if(j.hpR)j.hpR.rotation.x+=(-Math.sin(vf*0.5)*0.2-j.hpR.rotation.x)*0.1;
+        }else{
+            // Jumping jacks
+            const jj=Math.sin(vf*0.3);
+            if(j.shL)j.shL.rotation.x+=(-1.5*Math.abs(jj)-j.shL.rotation.x)*0.15;
+            if(j.shR)j.shR.rotation.x+=(-1.5*Math.abs(jj)-j.shR.rotation.x)*0.15;
+            if(j.hpL)j.hpL.rotation.x+=(0.3*Math.abs(jj)-j.hpL.rotation.x)*0.1;
+            if(j.hpR)j.hpR.rotation.x+=(0.3*Math.abs(jj)-j.hpR.rotation.x)*0.1;
+            if(j.hips)j.hips.position.y+=(((0.96+Math.abs(jj)*0.06)*(winner.ch.sc||1))-j.hips.position.y)*0.12;
+        }
+    }
+    // Loser: sad/dizzy on the ground
+    if(loser&&loser.j){
+        const lj=loser.j;
+        if(lj.torso)lj.torso.rotation.x+=(-1.0-lj.torso.rotation.x)*0.05;
+        if(lj.shL)lj.shL.rotation.x+=(0.5+Math.sin(vf*0.15)*0.2-lj.shL.rotation.x)*0.05;
+        if(lj.shR)lj.shR.rotation.x+=(0.5-Math.sin(vf*0.15)*0.2-lj.shR.rotation.x)*0.05;
+        if(lj.head)lj.head.rotation.x+=(-0.4+Math.sin(vf*0.1)*0.1-lj.head.rotation.x)*0.05;
     }
     if(victoryPoseTimer<=0){
         letterboxTop.style.height='0';letterboxBot.style.height='0';
