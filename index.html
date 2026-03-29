@@ -425,6 +425,11 @@ const isMobile='ontouchstart'in window||navigator.maxTouchPoints>0||matchMedia('
     document.getElementById('gc').addEventListener('touchstart',e=>e.preventDefault(),{passive:false});
     document.getElementById('gc').addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
 
+    // Tap anywhere to dismiss match end screen
+    document.addEventListener('touchstart',e=>{
+        if(gs===GS.MEND){K['KeyJ']=true;setTimeout(()=>{K['KeyJ']=false},100)}
+    },{passive:true});
+
     // Prevent zoom on double-tap
     let lastTap=0;
     document.addEventListener('touchend',e=>{
@@ -3222,7 +3227,15 @@ function loop(ts){
             case GS.MEND:
                 updateVictoryPose();
                 meTimer--;
-                if(pr('KeyJ')||pr('Enter')||meTimer<=0){gs=GS.MENU;document.getElementById('menu').style.display='flex';document.getElementById('hud').style.display='none';if(p1)p1.destroy();if(p2)p2.destroy();p1=null;p2=null;hideMoveList();if(NET.connected)netDisconnect()}
+                // Accept any key/button from either player to return to menu
+                const anyKey=pr('KeyJ')||pr('KeyK')||pr('KeyL')||pr('Enter')||pr('Space')||
+                    pr('Numpad1')||pr('Numpad2')||pr('Numpad3')||
+                    pr('ArrowUp')||pr('ArrowDown')||pr('KeyW')||pr('KeyS');
+                if(anyKey||meTimer<=0){
+                    gs=GS.MENU;document.getElementById('menu').style.display='flex';document.getElementById('hud').style.display='none';
+                    if(p1)p1.destroy();if(p2)p2.destroy();p1=null;p2=null;hideMoveList();
+                    if(NET.connected)netDisconnect();
+                }
                 break;
         }
         for(const k in K)KP[k]=K[k];
