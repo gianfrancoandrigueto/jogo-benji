@@ -259,7 +259,6 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { GammaCorrectionShader } from 'three/addons/shaders/GammaCorrectionShader.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
@@ -317,10 +316,11 @@ const isMobile='ontouchstart'in window||navigator.maxTouchPoints>0||matchMedia('
     const joy=document.getElementById('touch-joy');
     const knob=document.getElementById('joy-knob');
     const base=document.getElementById('joy-base');
-    let joyActive=false,joyId=null;
+    let joyActive=false,joyId=null,macroLock=false;
     const joyR=60; // max radius knob can travel
 
     function joyMove(cx,cy){
+        if(macroLock)return; // special macro in progress, don't overwrite
         const rect=base.getBoundingClientRect();
         const bx=rect.left+rect.width/2, by=rect.top+rect.height/2;
         let dx=cx-bx, dy=cy-by;
@@ -383,8 +383,9 @@ const isMobile='ontouchstart'in window||navigator.maxTouchPoints>0||matchMedia('
             if(keyCode==='_special'){
                 // Super macro: simulate qcf motion + light attack
                 // Down, Down-Forward, Forward + Light
+                macroLock=true;
                 K['KeyS']=true;
-                setTimeout(()=>{K['KeyS']=false;K['KeyD']=true;setTimeout(()=>{K['KeyJ']=true;setTimeout(()=>{K['KeyD']=false;K['KeyJ']=false},80)},50)},50);
+                setTimeout(()=>{K['KeyS']=false;K['KeyD']=true;setTimeout(()=>{K['KeyJ']=true;setTimeout(()=>{K['KeyD']=false;K['KeyJ']=false;macroLock=false},80)},50)},50);
                 activeTouches.set(t.identifier,{btn,key:null});
             }else if(keyCode){
                 K[keyCode]=true;
@@ -498,7 +499,6 @@ composer.addPass(ssaoPass);
 
 const bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),0.3,0.35,0.88);
 composer.addPass(bloom);
-composer.addPass(new OutputPass());
 const smaa=new SMAAPass(innerWidth,innerHeight);
 composer.addPass(smaa);
 
@@ -583,6 +583,7 @@ const CinematicShader={
 };
 const cinematicPass=new ShaderPass(CinematicShader);
 composer.addPass(cinematicPass);
+composer.addPass(new OutputPass());
 let chromaticTarget=0;
 
 addEventListener('resize',()=>{
@@ -618,7 +619,7 @@ function matSkin(color,rough=0.5){
 }
 // Physical material for fabric (velvet/silk look)
 function matFabric(color,rough=0.6,tex=null){
-    const k=`fab_${color}_${rough}_${tex?'t':'n'}`;
+    const k=`fab_${color}_${rough}_${tex?tex.id:'n'}`;
     if(MPC[k])return MPC[k];
     const opts={
         color,roughness:rough,metalness:0,envMapIntensity:0.35,
@@ -900,8 +901,16 @@ function mkNormTex(){
     return t;
 }
 
+function disposeObj(o){
+    if(o.geometry)o.geometry.dispose();
+    if(o.material){
+        if(Array.isArray(o.material))o.material.forEach(m=>m.dispose());
+        else o.material.dispose();
+    }
+    if(o.children)o.children.forEach(c=>disposeObj(c));
+}
 function clearStage(){
-    stageObjects.forEach(o=>scene.remove(o));
+    stageObjects.forEach(o=>{scene.remove(o);disposeObj(o)});
     stageObjects.length=0;wTrees.length=0;
     if(pMesh){scene.remove(pMesh);pMesh=null}
 }
@@ -1538,9 +1547,9 @@ class Fighter{
                 // Throw (forward + heavy)
                 if(this.chkThrow(inp,opp))break;
                 if(inp.d.dx!==0){this.vx=inp.d.dx*this.ch.spd;this.st='walk'}else if(this.st==='walk')this.st='idle';
-                if(inp.d.dy>0){this.st='crouch';this.sf=0}
-                if(inp.d.dy<0&&this.y<=0.01){this.vy=this.ch.jmp;this.vx=inp.d.dx*this.ch.spd;this.st='jump';this.sf=0}
-                this.blk=(inp.d.dx===-this.fac)&&this.st!=='jump';
+                if(inp.d.dy>0){this.st='crouch';this.sf=0;this.blk=(inp.d.dx===-this.fac);break}
+                if(inp.d.dy<0&&this.y<=0.01){this.vy=this.ch.jmp;this.vx=inp.d.dx*this.ch.spd;this.st='jump';this.sf=0;break}
+                this.blk=(inp.d.dx===-this.fac);
                 this.doAtk(inp);break;
             case'crouch':
                 if(!inp.d.dy||inp.d.dy<0){this.st='idle';this.sf=0}
@@ -1627,7 +1636,7 @@ class Fighter{
         if(this.dashCd>0)return false;
         const fwd=inp.d.dx===this.fac;
         const bck=inp.d.dx===-this.fac;
-        if(fwd&&pr(this.ctrl.r===this.fac>0?this.ctrl.r:this.ctrl.l)){
+        if(fwd&&pr(this.fac>0?this.ctrl.r:this.ctrl.l)){
             if(fc-this.lastFwd<12){
                 this.st='dash';this.sf=0;this.dashTimer=8;this.dashDir=this.fac;this.dashCd=20;
                 spawnDust(this.x,0.01,0,4,0.2,0.01);SFX.dash();
@@ -1635,7 +1644,7 @@ class Fighter{
             }
             this.lastFwd=fc;
         }
-        if(bck&&pr(this.ctrl.l===this.fac>0?this.ctrl.l:this.ctrl.r)){
+        if(bck&&pr(this.fac>0?this.ctrl.l:this.ctrl.r)){
             if(fc-this.lastBack<12){
                 this.st='dash';this.sf=0;this.dashTimer=6;this.dashDir=-this.fac;this.dashCd=20;this.inv=6;
                 spawnDust(this.x,0.01,0,4,0.2,0.01);SFX.dash();
@@ -2669,7 +2678,7 @@ function playTone(freq,dur,type='sine',vol=0.15,decay=true){
     const osc=audioCtx.createOscillator();
     const gain=audioCtx.createGain();
     osc.type=type;osc.frequency.value=freq;
-    gain.gain.value=vol;
+    gain.gain.setValueAtTime(vol,audioCtx.currentTime);
     if(decay)gain.gain.exponentialRampToValueAtTime(0.001,audioCtx.currentTime+dur);
     osc.connect(gain);gain.connect(audioCtx.destination);
     osc.start();osc.stop(audioCtx.currentTime+dur);
@@ -2681,7 +2690,7 @@ function playNoise(dur,vol=0.1){
     for(let i=0;i<d.length;i++)d[i]=(Math.random()*2-1)*vol;
     const src=audioCtx.createBufferSource();
     const gain=audioCtx.createGain();
-    src.buffer=buf;gain.gain.value=1;
+    src.buffer=buf;gain.gain.setValueAtTime(1,audioCtx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001,audioCtx.currentTime+dur);
     src.connect(gain);gain.connect(audioCtx.destination);
     src.start();
@@ -2939,9 +2948,7 @@ function netCreateRoom(){
             NET.roomCode=netGenCode();
             document.getElementById('room-code-display').textContent=NET.roomCode;
             NET.peer.destroy();
-            NET.peer=new Peer('dsf-'+NET.roomCode,{debug:0});
-            NET.peer.on('open',()=>netSetStatus('Sala criada! Aguardando<span class="ldot">.</span><span class="ldot">.</span><span class="ldot">.</span>'));
-            NET.peer.on('connection',conn=>{NET.conn=conn;netSetupConn()});
+            netCreateRoom(); // retry with new code (re-registers all handlers)
         }else{
             netSetStatus('Erro: '+err.type,'#ff4444');
         }
