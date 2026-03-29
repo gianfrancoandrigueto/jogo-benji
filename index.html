@@ -153,6 +153,18 @@ canvas{display:block;width:100vw;height:100vh}
 .ldot{display:inline-block;animation:ldot 1.4s infinite}
 .ldot:nth-child(2){animation-delay:.2s}.ldot:nth-child(3){animation-delay:.4s}
 @keyframes ldot{0%,80%,100%{opacity:.2}40%{opacity:1}}
+
+/* Voice Chat */
+#voice-btn{position:fixed;top:76px;left:50%;transform:translateX(-50%);z-index:18;display:none;width:42px;height:42px;border-radius:50%;background:rgba(0,0,0,.5);border:2px solid rgba(255,255,255,.15);cursor:pointer;align-items:center;justify-content:center;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);transition:.15s;pointer-events:auto}
+#voice-btn:active{transform:translateX(-50%) scale(.9)}
+#voice-btn.on{background:rgba(0,200,100,.25);border-color:rgba(0,255,100,.4);box-shadow:0 0 12px rgba(0,255,100,.2)}
+#voice-btn.on .mic-icon{fill:#00ff88}
+#voice-btn .mic-icon{fill:#888;width:20px;height:20px;transition:.15s}
+#voice-btn.muted{background:rgba(255,50,50,.2);border-color:rgba(255,50,50,.3)}
+#voice-btn.muted .mic-icon{fill:#ff4444}
+#voice-btn .mic-slash{display:none;position:absolute;width:28px;height:2px;background:#ff4444;transform:rotate(-45deg);border-radius:2px}
+#voice-btn.muted .mic-slash{display:block}
+#voice-status{position:fixed;top:122px;left:50%;transform:translateX(-50%);z-index:18;font-size:9px;color:#666;display:none;pointer-events:none;text-align:center;letter-spacing:1px}
 </style>
 </head>
 <body>
@@ -202,6 +214,13 @@ canvas{display:block;width:100vw;height:100vh}
 
 <!-- Announce -->
 <div id="ann"><div class="bg"></div><div class="tx"><div class="b"></div><div class="s"></div></div></div>
+
+<!-- Voice Chat Button -->
+<div id="voice-btn" title="Voice Chat">
+ <svg class="mic-icon" viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+ <div class="mic-slash"></div>
+</div>
+<div id="voice-status"></div>
 
 <!-- Online Lobby -->
 <div id="lobby">
@@ -3008,7 +3027,12 @@ function netSetupConn(){
     NET.conn.on('close',()=>{
         NET.connected=false;
         netSetStatus('Oponente desconectou!','#ff4444');
+        voiceStop();
     });
+
+    // Show voice chat button and listen for calls
+    document.getElementById('voice-btn').style.display='flex';
+    voiceListenForCalls();
 
     // After 1s start char select (host controls flow)
     setTimeout(()=>{
@@ -3082,10 +3106,124 @@ function netSendStart(p1,p2,stage){
 }
 
 function netDisconnect(){
+    voiceStop();
     if(NET.conn)try{NET.conn.close()}catch(e){}
     if(NET.peer)try{NET.peer.destroy()}catch(e){}
     NET.conn=null;NET.peer=null;NET.connected=false;NET.remoteInput={};
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// VOICE CHAT (WebRTC via PeerJS)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const VOICE={
+    localStream:null, remoteStream:null, mediaConn:null,
+    muted:false, active:false, remoteAudio:null
+};
+
+function voiceSetStatus(msg){
+    const el=document.getElementById('voice-status');
+    el.textContent=msg;
+    el.style.display=msg?'block':'none';
+}
+
+function voiceUpdateBtn(){
+    const btn=document.getElementById('voice-btn');
+    btn.classList.toggle('on',VOICE.active&&!VOICE.muted);
+    btn.classList.toggle('muted',VOICE.active&&VOICE.muted);
+}
+
+async function voiceStart(){
+    if(!NET.peer||!NET.connected)return;
+    try{
+        VOICE.localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+        VOICE.active=true;VOICE.muted=false;
+        voiceUpdateBtn();
+        voiceSetStatus('Mic ativo');
+
+        if(NET.isHost){
+            // Host calls guest
+            VOICE.mediaConn=NET.peer.call('dsf-'+NET.roomCode+'-guest',VOICE.localStream);
+            VOICE.mediaConn.on('stream',stream=>voicePlayRemote(stream));
+            VOICE.mediaConn.on('close',()=>{voiceSetStatus('Voz desconectada');VOICE.active=false;voiceUpdateBtn()});
+        }else{
+            // Guest calls host
+            VOICE.mediaConn=NET.peer.call('dsf-'+NET.roomCode,VOICE.localStream);
+            VOICE.mediaConn.on('stream',stream=>voicePlayRemote(stream));
+            VOICE.mediaConn.on('close',()=>{voiceSetStatus('Voz desconectada');VOICE.active=false;voiceUpdateBtn()});
+        }
+
+        setTimeout(()=>voiceSetStatus(''),2000);
+    }catch(err){
+        voiceSetStatus('Sem permissao do mic');
+        setTimeout(()=>voiceSetStatus(''),3000);
+    }
+}
+
+function voicePlayRemote(stream){
+    VOICE.remoteStream=stream;
+    if(!VOICE.remoteAudio){
+        VOICE.remoteAudio=document.createElement('audio');
+        VOICE.remoteAudio.autoplay=true;
+        document.body.appendChild(VOICE.remoteAudio);
+    }
+    VOICE.remoteAudio.srcObject=stream;
+    voiceSetStatus('Voz conectada!');
+    setTimeout(()=>voiceSetStatus(''),2000);
+}
+
+function voiceToggleMute(){
+    if(!VOICE.active){
+        voiceStart();
+        return;
+    }
+    VOICE.muted=!VOICE.muted;
+    if(VOICE.localStream){
+        VOICE.localStream.getAudioTracks().forEach(t=>{t.enabled=!VOICE.muted});
+    }
+    voiceUpdateBtn();
+    voiceSetStatus(VOICE.muted?'Mic mutado':'Mic ativo');
+    setTimeout(()=>voiceSetStatus(''),1500);
+}
+
+function voiceStop(){
+    if(VOICE.localStream){
+        VOICE.localStream.getTracks().forEach(t=>t.stop());
+        VOICE.localStream=null;
+    }
+    if(VOICE.mediaConn)try{VOICE.mediaConn.close()}catch(e){}
+    VOICE.mediaConn=null;VOICE.active=false;VOICE.muted=false;
+    if(VOICE.remoteAudio){VOICE.remoteAudio.srcObject=null}
+    document.getElementById('voice-btn').style.display='none';
+    document.getElementById('voice-btn').className='';
+    voiceSetStatus('');
+}
+
+// Answer incoming voice calls
+function voiceListenForCalls(){
+    if(!NET.peer)return;
+    NET.peer.on('call',call=>{
+        // Auto-answer if we have a stream, otherwise get mic first
+        if(VOICE.localStream){
+            call.answer(VOICE.localStream);
+        }else{
+            navigator.mediaDevices.getUserMedia({audio:true,video:false}).then(stream=>{
+                VOICE.localStream=stream;VOICE.active=true;VOICE.muted=false;
+                voiceUpdateBtn();
+                call.answer(stream);
+            }).catch(()=>{
+                // Answer without sending audio (listen only)
+                call.answer();
+            });
+        }
+        VOICE.mediaConn=call;
+        call.on('stream',stream=>voicePlayRemote(stream));
+        call.on('close',()=>{voiceSetStatus('Voz desconectada');VOICE.active=false;voiceUpdateBtn()});
+    });
+}
+
+// Voice button click handler
+document.getElementById('voice-btn').addEventListener('click',voiceToggleMute);
+document.getElementById('voice-btn').addEventListener('touchstart',e=>{e.preventDefault();voiceToggleMute()},{passive:false});
 
 // Lobby button handlers
 document.getElementById('lb-create').addEventListener('click',netCreateRoom);
