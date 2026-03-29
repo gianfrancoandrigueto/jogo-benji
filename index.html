@@ -3563,6 +3563,14 @@ function netSendStart(p1,p2,stage){
 
 function netExtractFighterState(f){
     if(!f)return null;
+    // Serialize current move: send full move object for dynamic moves (crouch/wake-up)
+    let cmData=null;
+    if(f.cm){
+        cmData={n:f.cm.n,su:f.cm.su,ac:f.cm.ac,rc:f.cm.rc,dm:f.cm.dm,
+            hs:f.cm.hs,bs:f.cm.bs,sp:f.cm.sp?1:0,
+            kb:{x:f.cm.kb.x,y:f.cm.kb.y},
+            hb:{x:f.cm.hb.x,y:f.cm.hb.y,w:f.cm.hb.w,h:f.cm.hb.h,d:f.cm.hb.d}};
+    }
     return{
         x:Math.round(f.x*1000)/1000,
         y:Math.round(f.y*1000)/1000,
@@ -3571,10 +3579,10 @@ function netExtractFighterState(f){
         hp:f.hp,sp:Math.round(f.sp*10)/10,
         st:f.st,sf:f.sf,mf:f.mf,
         fac:f.fac,
-        cm:f.cm?f.cm.n:null,
-        hs:f.hs,bs:f.bs,
-        inv:f.inv,
-        combo:f.combo,comboS:f.comboS,
+        cm:cmData,
+        hst:f.hst,bst:f.bst,kdt:f.kdt,
+        inv:f.inv,hitA:f.hitA,psn:f.psn,
+        cc:f.cc,cd:f.cd,
         grounded:f.y<=0
     };
 }
@@ -3599,14 +3607,15 @@ function netApplyFighterState(f,s){
     f.hp=s.hp;f.sp=s.sp;
     f.st=s.st;f.sf=s.sf;f.mf=s.mf;
     f.fac=s.fac;
-    f.hs=s.hs;f.bs=s.bs;
-    f.inv=s.inv;
-    f.combo=s.combo;f.comboS=s.comboS;
-    // Resolve current move by name
-    if(s.cm&&f.ch&&f.ch.mv){
-        const mv=f.ch.mv;
-        f.cm=Object.values(mv).find(m=>m.n===s.cm)||null;
-    }else if(!s.cm){
+    f.hst=s.hst;f.bst=s.bst;f.kdt=s.kdt;
+    f.inv=s.inv;f.hitA=s.hitA;f.psn=s.psn;
+    f.cc=s.cc;f.cd=s.cd;
+    // Resolve current move: try named lookup first, fall back to full move data
+    if(s.cm){
+        const mv=f.ch&&f.ch.mv;
+        const found=mv?Object.values(mv).find(m=>m.n===s.cm.n):null;
+        f.cm=found||s.cm; // use synced move data for dynamic moves (crouch/wake-up)
+    }else{
         f.cm=null;
     }
     // Update model position
