@@ -1925,8 +1925,15 @@ class Fighter{
         return null;
     }
     update(opp){
+        // GUEST online: skip ALL simulation logic, only run animation/rendering
+        // Host sends authoritative state via netApplyGameState
+        if(NET.connected&&!NET.isHost){
+            this.af++;this.sf++;
+            this.uMdl();
+            return;
+        }
         this.af++;this.sf++;
-        if(this.psn>0&&(!NET.connected||NET.isHost)){this.psn--;if(this.psn%10===0)this.hp=Math.max(0,this.hp-2)}
+        if(this.psn>0){this.psn--;if(this.psn%10===0)this.hp=Math.max(0,this.hp-2)}
         if(this.inv>0)this.inv--;
         if(this.dashCd>0)this.dashCd--;
         if(this.throwCd>0)this.throwCd--;
