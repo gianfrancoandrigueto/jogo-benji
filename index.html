@@ -199,7 +199,7 @@ canvas{display:block;width:100vw;height:100vh}
   <div><div style="font-size:11px;color:#555;letter-spacing:1px;margin-bottom:4px">STAGE</div><div id="stage-sel" style="display:flex;gap:8px"><div class="mo sel" data-s="0" style="font-size:12px;padding:6px 14px">Wisteria Forest</div><div class="mo" data-s="1" style="font-size:12px;padding:6px 14px">Snowy Mountain</div></div></div>
   <div id="diff-wrap"><div style="font-size:11px;color:#555;letter-spacing:1px;margin-bottom:4px">CPU DIFFICULTY</div><div id="diff-sel" style="display:flex;gap:8px"><div class="mo" data-d="0" style="font-size:12px;padding:6px 14px">Easy</div><div class="mo sel" data-d="1" style="font-size:12px;padding:6px 14px">Medium</div><div class="mo" data-d="2" style="font-size:12px;padding:6px 14px">Hard</div></div></div>
  </div>
- <div class="mc">W/S: Mode &nbsp;|&nbsp; A/D: Stage &nbsp;|&nbsp; Q/E: Difficulty &nbsp;|&nbsp; J: Confirm<br>P1: WASD + JKL &nbsp;|&nbsp; P2: Arrows + Numpad 1-3</div>
+ <div class="mc">W/S: Mode &nbsp;|&nbsp; A/D: Stage &nbsp;|&nbsp; Q/E: Difficulty &nbsp;|&nbsp; J: Confirm<br>P1: WASD + JKL &nbsp;|&nbsp; P2: Arrows + Numpad 1-3<br>J+K: Special 1 &nbsp;|&nbsp; K+L: Special 2 &nbsp;|&nbsp; J+K+L: Super</div>
 </div>
 
 <!-- Select -->
@@ -505,9 +505,9 @@ pmrem.compileEquirectangularShader();
 scene.environment=pmrem.fromScene(new RoomEnvironment(),0.04).texture;
 // Low env intensity to preserve night atmosphere but provide PBR reflections
 
-const cam=new THREE.PerspectiveCamera(38,innerWidth/innerHeight,0.1,120);
-cam.position.set(0,2.8,11);
-cam.lookAt(0,1.2,0);
+const cam=new THREE.PerspectiveCamera(36,innerWidth/innerHeight,0.1,120);
+cam.position.set(0,2.4,10.5);
+cam.lookAt(0,1.15,0);
 
 // Post-processing pipeline
 const composer=new EffectComposer(R);
@@ -598,8 +598,14 @@ const CinematicShader={
             float grain=hash(uv*u_resolution+u_time*100.0)*2.0-1.0;
             col+=grain*u_grain;
 
-            // Speed lines during supers (radial pattern)
-            // (controlled via u_chromatic intensity > 0.005)
+            // Anime edge enhancement (subtle sharpening for cel-shaded look)
+            vec2 texel=1.0/u_resolution;
+            vec3 n=texture2D(tDiffuse,uv+vec2(0,texel.y)).rgb;
+            vec3 s=texture2D(tDiffuse,uv-vec2(0,texel.y)).rgb;
+            vec3 e=texture2D(tDiffuse,uv+vec2(texel.x,0)).rgb;
+            vec3 w=texture2D(tDiffuse,uv-vec2(texel.x,0)).rgb;
+            float edgeD=length(n-s)+length(e-w);
+            col=mix(col,col*0.7,smoothstep(0.3,0.8,edgeD)*0.15);
 
             gl_FragColor=vec4(clamp(col,0.0,1.0),1.0);
         }
@@ -618,7 +624,38 @@ addEventListener('resize',()=>{
 });
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// PBR MATERIAL HELPERS
+// ANIME CEL-SHADING SYSTEM (Toon + PBR Hybrid)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Toon gradient map: 5-band discrete lighting for anime look
+const toonGradData=new Uint8Array([40,40,40,255, 80,80,80,255, 140,140,140,255, 200,200,200,255, 255,255,255,255]);
+const toonGradMap=new THREE.DataTexture(toonGradData,5,1,THREE.RGBAFormat);
+toonGradMap.magFilter=THREE.NearestFilter;toonGradMap.minFilter=THREE.NearestFilter;toonGradMap.needsUpdate=true;
+
+// Outline shader material (vertex displacement along normals - much better than scale)
+const OutlineVS=`
+    uniform float outlineThickness;
+    void main(){
+        vec3 norm=normalize(normalMatrix*normal);
+        vec4 pos=modelViewMatrix*vec4(position,1.0);
+        pos.xyz+=norm*outlineThickness;
+        gl_Position=projectionMatrix*pos;
+    }
+`;
+const OutlineFS=`
+    uniform vec3 outlineColor;
+    void main(){gl_FragColor=vec4(outlineColor,1.0);}
+`;
+function outlineShaderM(thickness=0.018,color=0x0A0A18){
+    return new THREE.ShaderMaterial({
+        uniforms:{outlineThickness:{value:thickness},outlineColor:{value:new THREE.Color(color)}},
+        vertexShader:OutlineVS,fragmentShader:OutlineFS,side:THREE.BackSide
+    });
+}
+const _outlineMat=outlineShaderM(0.018,0x0A0A18);
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PBR + TOON MATERIAL HELPERS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const MC={};
 function mat(color,rough=0.65,metal=0,emCol=null,emInt=0){
@@ -629,31 +666,35 @@ function mat(color,rough=0.65,metal=0,emCol=null,emInt=0){
     MC[k]=m;
     return m;
 }
-// Physical material for skin (sheen simulates subsurface scattering)
+// Toon material for character body parts (anime cel-shaded look)
+const TC={};
+function matToon(color,emCol=null,emInt=0){
+    const k=`toon_${color}_${emCol}_${emInt}`;
+    if(TC[k])return TC[k];
+    const m=new THREE.MeshToonMaterial({color,gradientMap:toonGradMap});
+    if(emCol){m.emissive=new THREE.Color(emCol);m.emissiveIntensity=emInt}
+    TC[k]=m;return m;
+}
+// Physical material for skin with toon shading hybrid (sheen + toon gradient)
 const MPC={};
-function matSkin(color,rough=0.5){
-    const k=`skin_${color}_${rough}`;
+function matSkin(color){
+    const k=`skin_${color}`;
     if(MPC[k])return MPC[k];
-    const m=new THREE.MeshPhysicalMaterial({
-        color,roughness:rough,metalness:0,envMapIntensity:0.35,
-        sheen:0.4,sheenRoughness:0.5,sheenColor:new THREE.Color(0xffccaa),
-        clearcoat:0.05,clearcoatRoughness:0.4
+    const m=new THREE.MeshToonMaterial({
+        color,gradientMap:toonGradMap
     });
     MPC[k]=m;return m;
 }
-// Physical material for fabric (velvet/silk look)
-function matFabric(color,rough=0.6,tex=null){
-    const k=`fab_${color}_${rough}_${tex?tex.id:'n'}`;
+// Fabric with toon shading (anime cloth look)
+function matFabric(color,tex=null){
+    const k=`fab_${color}_${tex?tex.id:'n'}`;
     if(MPC[k])return MPC[k];
-    const opts={
-        color,roughness:rough,metalness:0,envMapIntensity:0.35,
-        sheen:0.8,sheenRoughness:0.4,sheenColor:new THREE.Color(color).lerp(new THREE.Color(0xffffff),0.3)
-    };
+    const opts={color,gradientMap:toonGradMap};
     if(tex)opts.map=tex;
-    const m=new THREE.MeshPhysicalMaterial(opts);
+    const m=new THREE.MeshToonMaterial(opts);
     MPC[k]=m;return m;
 }
-// Physical material for metal weapons
+// Physical material for metal weapons (keep PBR for reflective metals)
 function matMetal(color,rough=0.25,metal=0.85){
     const k=`met_${color}_${rough}_${metal}`;
     if(MPC[k])return MPC[k];
@@ -663,11 +704,11 @@ function matMetal(color,rough=0.25,metal=0.85){
     });
     MPC[k]=m;return m;
 }
-function matTex(tex,rough=0.7){
-    return new THREE.MeshPhysicalMaterial({map:tex,roughness:rough,envMapIntensity:0.35,sheen:0.6,sheenRoughness:0.45,sheenColor:new THREE.Color(0xddccbb)});
+function matTex(tex){
+    return new THREE.MeshToonMaterial({map:tex,gradientMap:toonGradMap});
 }
 function glowM(color){return new THREE.MeshBasicMaterial({color})}
-function outM(){return new THREE.MeshBasicMaterial({color:0x060610,side:THREE.BackSide})}
+function outM(){return _outlineMat.clone()}
 
 // Procedural roughness map
 function mkRoughTex(baseVal=0.5,variation=0.3,sz=128){
@@ -683,44 +724,57 @@ function mkRoughTex(baseVal=0.5,variation=0.3,sz=128){
     const t=new THREE.CanvasTexture(cv);t.wrapS=t.wrapT=THREE.RepeatWrapping;return t;
 }
 
-// Checkerboard texture (Tanjiro haori) - HD
-function mkChecker(c1,c2,sz=64){
+// Checkerboard texture (Tanjiro haori) - HD 512px
+function mkChecker(c1,c2,sz=512){
     const cv=document.createElement('canvas');cv.width=sz;cv.height=sz;
-    const x=cv.getContext('2d'),h=sz/2;
+    const x=cv.getContext('2d'),cell=sz/8;
     x.fillStyle=c1;x.fillRect(0,0,sz,sz);
     x.fillStyle=c2;
-    x.fillRect(0,0,h,h);x.fillRect(h,h,h,h);
-    // Soft edge pass
-    const imgD=x.getImageData(0,0,sz,sz);
-    x.putImageData(imgD,0,0);
+    for(let r=0;r<8;r++)for(let col=0;col<8;col++){if((r+col)%2===0)x.fillRect(col*cell,r*cell,cell,cell)}
+    // Fabric weave overlay
+    for(let i=0;i<4000;i++){
+        const v=128+Math.random()*60;
+        x.fillStyle=`rgba(${v},${v},${v},0.03)`;
+        x.fillRect(Math.random()*sz,Math.random()*sz,1+Math.random()*2,1);
+    }
+    // Stitch lines at checker boundaries
+    x.strokeStyle='rgba(0,0,0,0.08)';x.lineWidth=1;
+    for(let i=1;i<8;i++){x.beginPath();x.moveTo(i*cell,0);x.lineTo(i*cell,sz);x.stroke();x.beginPath();x.moveTo(0,i*cell);x.lineTo(sz,i*cell);x.stroke()}
     const t=new THREE.CanvasTexture(cv);
     t.wrapS=t.wrapT=THREE.RepeatWrapping;
-    t.repeat.set(4,5);t.magFilter=THREE.LinearFilter;t.minFilter=THREE.LinearMipmapLinearFilter;
+    t.repeat.set(3,4);t.magFilter=THREE.LinearFilter;t.minFilter=THREE.LinearMipmapLinearFilter;
     t.generateMipmaps=true;t.anisotropy=R.capabilities.getMaxAnisotropy();
     return t;
 }
-// Asanoha for Nezuko - HD
+// Asanoha for Nezuko - HD 512px
 function mkAsanoha(){
-    const cv=document.createElement('canvas');cv.width=256;cv.height=256;
+    const sz=512,cv=document.createElement('canvas');cv.width=sz;cv.height=sz;
     const x=cv.getContext('2d');
-    x.fillStyle='#FFB6C1';x.fillRect(0,0,256,256);
-    x.strokeStyle='#D4708A';x.lineWidth=2;
-    const cell=16;
-    for(let i=0;i<256/cell;i++)for(let j=0;j<256/cell;j++){
-        const ox=i*cell+cell/2,oy=j*cell+cell/2,r=cell*0.35;
+    x.fillStyle='#FFB6C1';x.fillRect(0,0,sz,sz);
+    const cell=24;
+    for(let i=0;i<sz/cell;i++)for(let j=0;j<sz/cell;j++){
+        const ox=i*cell+cell/2,oy=j*cell+cell/2,r=cell*0.38;
+        // Outer diamond
+        x.strokeStyle='#D4708A';x.lineWidth=2.5;
         x.beginPath();x.moveTo(ox,oy-r);x.lineTo(ox+r,oy);x.lineTo(ox,oy+r);x.lineTo(ox-r,oy);x.closePath();x.stroke();
+        // Cross lines
         x.beginPath();x.moveTo(ox,oy-r);x.lineTo(ox,oy+r);x.moveTo(ox-r,oy);x.lineTo(ox+r,oy);x.stroke();
-        // Inner diamond detail
-        x.strokeStyle='#C4607A';x.lineWidth=1;
+        // Diagonal lines (hemp leaf detail)
+        x.strokeStyle='#C4607A';x.lineWidth=1.5;
         const r2=r*0.5;
         x.beginPath();x.moveTo(ox,oy-r2);x.lineTo(ox+r2,oy);x.lineTo(ox,oy+r2);x.lineTo(ox-r2,oy);x.closePath();x.stroke();
-        x.strokeStyle='#D4708A';x.lineWidth=2;
+        // Inner star pattern (true asanoha)
+        x.strokeStyle='#B8506A';x.lineWidth=1;
+        x.beginPath();x.moveTo(ox-r,oy);x.lineTo(ox,oy-r2);x.moveTo(ox-r,oy);x.lineTo(ox,oy+r2);
+        x.moveTo(ox+r,oy);x.lineTo(ox,oy-r2);x.moveTo(ox+r,oy);x.lineTo(ox,oy+r2);
+        x.moveTo(ox,oy-r);x.lineTo(ox-r2,oy);x.moveTo(ox,oy-r);x.lineTo(ox+r2,oy);
+        x.moveTo(ox,oy+r);x.lineTo(ox-r2,oy);x.moveTo(ox,oy+r);x.lineTo(ox+r2,oy);x.stroke();
     }
-    // Subtle fabric noise
-    for(let i=0;i<2000;i++){
+    // Fabric texture noise
+    for(let i=0;i<5000;i++){
         const v=180+Math.random()*40;
-        x.fillStyle=`rgba(${v},${v*0.6},${v*0.7},0.04)`;
-        x.fillRect(Math.random()*256,Math.random()*256,1+Math.random()*2,1);
+        x.fillStyle=`rgba(${v},${v*0.6},${v*0.7},0.03)`;
+        x.fillRect(Math.random()*sz,Math.random()*sz,1+Math.random()*2,1);
     }
     const t=new THREE.CanvasTexture(cv);
     t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(2,3);
@@ -728,47 +782,122 @@ function mkAsanoha(){
     t.anisotropy=R.capabilities.getMaxAnisotropy();
     return t;
 }
-// Giyu half haori - HD
-function mkGiyuTex(){
-    const cv=document.createElement('canvas');cv.width=256;cv.height=256;
+// Zenitsu thunder triangle pattern (Uroko) - yellow/orange with white triangles
+function mkZenitsuTex(){
+    const sz=512,cv=document.createElement('canvas');cv.width=sz;cv.height=sz;
     const x=cv.getContext('2d');
-    // Left half: burgundy solid with subtle weave
-    x.fillStyle='#722F37';x.fillRect(0,0,128,256);
-    for(let i=0;i<1500;i++){x.fillStyle=`rgba(90,30,40,${0.05+Math.random()*0.05})`;x.fillRect(Math.random()*128,Math.random()*256,1,2)}
-    // Right half: yellow-green checker
-    x.fillStyle='#F0C040';x.fillRect(128,0,128,256);
-    x.fillStyle='#2D5A27';
-    const cs=16;
-    for(let y=0;y<256/cs;y++)for(let xi=0;xi<128/cs;xi++){if((xi+y)%2===0)x.fillRect(128+xi*cs,y*cs,cs,cs)}
-    // Fabric texture overlay
-    for(let i=0;i<2000;i++){x.fillStyle=`rgba(255,255,255,0.02)`;x.fillRect(128+Math.random()*128,Math.random()*256,1,2)}
+    // Base gradient yellow->orange
+    const g=x.createLinearGradient(0,0,0,sz);
+    g.addColorStop(0,'#F9E179');g.addColorStop(1,'#E48A32');
+    x.fillStyle=g;x.fillRect(0,0,sz,sz);
+    // White triangle pattern (uroko - scales)
+    x.fillStyle='rgba(255,255,255,0.35)';
+    const triH=28,triW=32;
+    for(let r=0;r<sz/triH+1;r++)for(let c=0;c<sz/triW+1;c++){
+        const ox=c*triW+(r%2?triW/2:0),oy=r*triH;
+        x.beginPath();x.moveTo(ox,oy);x.lineTo(ox+triW/2,oy+triH);x.lineTo(ox-triW/2,oy+triH);x.closePath();x.fill();
+    }
+    // Darker triangle outlines
+    x.strokeStyle='rgba(200,140,50,0.25)';x.lineWidth=1;
+    for(let r=0;r<sz/triH+1;r++)for(let c=0;c<sz/triW+1;c++){
+        const ox=c*triW+(r%2?triW/2:0),oy=r*triH;
+        x.beginPath();x.moveTo(ox,oy);x.lineTo(ox+triW/2,oy+triH);x.lineTo(ox-triW/2,oy+triH);x.closePath();x.stroke();
+    }
+    // Fabric noise
+    for(let i=0;i<3000;i++){x.fillStyle=`rgba(255,230,150,0.04)`;x.fillRect(Math.random()*sz,Math.random()*sz,2,1)}
+    const t=new THREE.CanvasTexture(cv);
+    t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(2,3);
+    t.magFilter=THREE.LinearFilter;t.minFilter=THREE.LinearMipmapLinearFilter;
+    t.anisotropy=R.capabilities.getMaxAnisotropy();
+    return t;
+}
+// Shinobu butterfly wing haori pattern
+function mkButterflyTex(){
+    const sz=512,cv=document.createElement('canvas');cv.width=sz;cv.height=sz;
+    const x=cv.getContext('2d');
+    x.fillStyle='#9370DB';x.fillRect(0,0,sz,sz);
+    // Butterfly wing gradient overlay
+    const g=x.createRadialGradient(sz/2,sz/2,50,sz/2,sz/2,sz/2);
+    g.addColorStop(0,'rgba(106,13,173,0.3)');g.addColorStop(0.5,'rgba(147,112,219,0)');g.addColorStop(1,'rgba(255,105,180,0.2)');
+    x.fillStyle=g;x.fillRect(0,0,sz,sz);
+    // Wing vein patterns
+    x.strokeStyle='rgba(106,13,173,0.4)';x.lineWidth=2;
+    for(let w=0;w<4;w++){
+        const cx=sz*0.25+w*sz*0.18,cy=sz*0.5;
+        // Wing outline
+        x.beginPath();
+        x.ellipse(cx,cy-40,35,55,0,0,Math.PI*2);x.stroke();
+        x.beginPath();
+        x.ellipse(cx,cy+30,30,40,0,0,Math.PI*2);x.stroke();
+        // Wing fill with gradient
+        const wg=x.createRadialGradient(cx,cy,5,cx,cy,50);
+        wg.addColorStop(0,'rgba(180,130,255,0.3)');wg.addColorStop(1,'rgba(106,13,173,0.1)');
+        x.fillStyle=wg;x.beginPath();x.ellipse(cx,cy-40,33,53,0,0,Math.PI*2);x.fill();
+        // Veins
+        x.strokeStyle='rgba(75,0,130,0.3)';x.lineWidth=1;
+        for(let v=0;v<5;v++){
+            x.beginPath();x.moveTo(cx,cy);x.lineTo(cx+Math.cos(v*0.8-1)*40,cy-40+Math.sin(v*0.8-1)*50);x.stroke();
+        }
+    }
+    // Fabric noise
+    for(let i=0;i<4000;i++){x.fillStyle=`rgba(200,180,255,0.03)`;x.fillRect(Math.random()*sz,Math.random()*sz,1+Math.random()*2,1)}
     const t=new THREE.CanvasTexture(cv);
     t.magFilter=THREE.LinearFilter;t.minFilter=THREE.LinearMipmapLinearFilter;
     t.anisotropy=R.capabilities.getMaxAnisotropy();
     return t;
 }
-// Rengoku flame haori - HD
+// Giyu half haori - HD 512px
+function mkGiyuTex(){
+    const sz=512,cv=document.createElement('canvas');cv.width=sz;cv.height=sz;
+    const x=cv.getContext('2d'),half=sz/2;
+    // Left half: burgundy solid with subtle weave
+    x.fillStyle='#722F37';x.fillRect(0,0,half,sz);
+    for(let i=0;i<3000;i++){x.fillStyle=`rgba(90,30,40,${0.04+Math.random()*0.04})`;x.fillRect(Math.random()*half,Math.random()*sz,1,2)}
+    // Weave pattern on burgundy
+    x.strokeStyle='rgba(60,20,30,0.08)';x.lineWidth=1;
+    for(let y=0;y<sz;y+=6){x.beginPath();x.moveTo(0,y);x.lineTo(half,y);x.stroke()}
+    // Right half: yellow-green checker (Bishamon-Kikkou)
+    x.fillStyle='#F0C040';x.fillRect(half,0,half,sz);
+    x.fillStyle='#2D5A27';
+    const cs=24;
+    for(let y=0;y<sz/cs;y++)for(let xi=0;xi<half/cs;xi++){if((xi+y)%2===0)x.fillRect(half+xi*cs,y*cs,cs,cs)}
+    // Fabric texture overlay
+    for(let i=0;i<4000;i++){x.fillStyle=`rgba(255,255,255,0.02)`;x.fillRect(half+Math.random()*half,Math.random()*sz,1,2)}
+    // Center dividing line
+    x.strokeStyle='rgba(0,0,0,0.15)';x.lineWidth=2;x.beginPath();x.moveTo(half,0);x.lineTo(half,sz);x.stroke();
+    const t=new THREE.CanvasTexture(cv);
+    t.magFilter=THREE.LinearFilter;t.minFilter=THREE.LinearMipmapLinearFilter;
+    t.anisotropy=R.capabilities.getMaxAnisotropy();
+    return t;
+}
+// Rengoku flame haori - HD 512px
 function mkFlameTex(){
-    const cv=document.createElement('canvas');cv.width=256;cv.height=512;
+    const cv=document.createElement('canvas');cv.width=512;cv.height=1024;
     const x=cv.getContext('2d');
-    x.fillStyle='#FFFAF0';x.fillRect(0,0,256,512);
+    x.fillStyle='#FFFAF0';x.fillRect(0,0,512,1024);
     // Subtle fabric weave on white
-    for(let i=0;i<3000;i++){x.fillStyle=`rgba(240,235,225,${0.1+Math.random()*0.1})`;x.fillRect(Math.random()*256,Math.random()*320,2,1)}
-    // Flame gradient bottom
-    const g=x.createLinearGradient(0,310,0,512);
-    g.addColorStop(0,'rgba(255,100,0,0)');g.addColorStop(0.2,'#FF8800');g.addColorStop(0.5,'#FF4400');g.addColorStop(0.8,'#DD1100');g.addColorStop(1,'#990000');
-    x.fillStyle=g;x.fillRect(0,310,256,202);
-    // Detailed flame tongues
+    for(let i=0;i<5000;i++){x.fillStyle=`rgba(240,235,225,${0.08+Math.random()*0.08})`;x.fillRect(Math.random()*512,Math.random()*640,2,1)}
+    // Flame gradient bottom (more detailed)
+    const g=x.createLinearGradient(0,620,0,1024);
+    g.addColorStop(0,'rgba(255,200,0,0)');g.addColorStop(0.1,'rgba(255,180,0,0.3)');g.addColorStop(0.25,'#FF8800');g.addColorStop(0.5,'#FF4400');g.addColorStop(0.75,'#DD1100');g.addColorStop(1,'#880000');
+    x.fillStyle=g;x.fillRect(0,620,512,404);
+    // Flame tongues - layer 1 (bright yellow)
     x.fillStyle='#FFD700';
-    for(let i=0;i<30;i++){
-        const fx=i*9;const fh=30+Math.sin(i*1.2)*20+Math.random()*15;
-        x.beginPath();x.moveTo(fx,350);x.quadraticCurveTo(fx+4,350-fh,fx+8,350);x.fill();
+    for(let i=0;i<50;i++){
+        const fx=i*10.5;const fh=50+Math.sin(i*1.2)*35+Math.random()*20;
+        x.beginPath();x.moveTo(fx,700);x.quadraticCurveTo(fx+5,700-fh,fx+10,700);x.fill();
     }
-    // Orange mid flames
+    // Layer 2 (orange)
     x.fillStyle='#FF6600';
+    for(let i=0;i<35;i++){
+        const fx=i*15+5;const fh=35+Math.sin(i*0.8)*20+Math.random()*10;
+        x.beginPath();x.moveTo(fx,730);x.quadraticCurveTo(fx+7,730-fh,fx+14,730);x.fill();
+    }
+    // Layer 3 (white-hot core flames)
+    x.fillStyle='rgba(255,255,220,0.5)';
     for(let i=0;i<20;i++){
-        const fx=i*13+3;const fh=20+Math.sin(i*0.8)*12;
-        x.beginPath();x.moveTo(fx,365);x.quadraticCurveTo(fx+5,365-fh,fx+10,365);x.fill();
+        const fx=i*26+8;const fh=20+Math.random()*15;
+        x.beginPath();x.moveTo(fx,710);x.quadraticCurveTo(fx+4,710-fh,fx+8,710);x.fill();
     }
     const t=new THREE.CanvasTexture(cv);
     t.magFilter=THREE.LinearFilter;t.minFilter=THREE.LinearMipmapLinearFilter;
@@ -812,18 +941,28 @@ const frontL=new THREE.DirectionalLight(0xddddee,2.5);
 frontL.position.set(0,4,10);
 scene.add(frontL);
 
-// Ambient - PI * 0.6 ≈ 1.9
-const ambL=new THREE.AmbientLight(0x445566,2);
+// Ambient - boosted for toon material band visibility
+const ambL=new THREE.AmbientLight(0x556677,2.5);
 scene.add(ambL);
 
 // Hemisphere (sky blue / ground warm bounce) - PI * 0.5 ≈ 1.6
 const hemiL=new THREE.HemisphereLight(0x6688aa,0x332211,1.6);
 scene.add(hemiL);
 
-// Rim light (purple - Demon Slayer vibe) - PI * 0.5 ≈ 1.6
-const rimL=new THREE.DirectionalLight(0x6644aa,1.6);
+// Rim light (purple - Demon Slayer vibe) - enhanced for anime cel-shaded edge glow
+const rimL=new THREE.DirectionalLight(0x8866CC,2.8);
 rimL.position.set(-2,5,-6);
 scene.add(rimL);
+
+// Secondary rim (cyan - anime double rim for character separation)
+const rimL2=new THREE.DirectionalLight(0x4488AA,1.2);
+rimL2.position.set(3,3,-5);
+scene.add(rimL2);
+
+// Side key light (enhances 3/4 view depth on characters)
+const sideL=new THREE.DirectionalLight(0x99AACC,1.4);
+sideL.position.set(8,4,2);
+scene.add(sideL);
 
 // Dynamic hit light - decay=0 for artistic control, high intensity
 const hitL=new THREE.PointLight(0xffffff,0,10);
@@ -1192,7 +1331,7 @@ buildStage(0);
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // CHARACTER BUILDER (PBR, Proportional, Detailed)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function addO(p,m){p.add(m);const o=m.clone();o.material=outM();o.scale.multiplyScalar(1.04);p.add(o);return m}
+function addO(p,m){p.add(m);const o=m.clone();o.material=outM();o.renderOrder=-1;p.add(o);return m}
 
 // Helper: create mesh, set position/rotation/scale, add to parent
 function mk(parent,geo,material,px=0,py=0,pz=0,rx=0,ry=0,rz=0,sx=1,sy=1,sz=1){
@@ -1210,149 +1349,247 @@ function buildChar(def){
 
     // Hips
     const hips=new THREE.Group();hips.position.y=0.96*S;root.add(hips);j.hips=hips;
-    const pelvis=addO(hips,new THREE.Mesh(new THREE.BoxGeometry(0.4*S,0.14*S,0.22*S),matFabric(c.belt||c.pants,0.7)));
+    const pelvisGeo=new THREE.CylinderGeometry(0.2*S,0.18*S,0.14*S,10);
+    pelvisGeo.scale(1,1,0.65);
+    const pelvis=addO(hips,new THREE.Mesh(pelvisGeo,matFabric(c.belt||c.pants)));
     pelvis.castShadow=true;
 
-    // Torso
+    // Torso (tapered cylinder for organic body shape)
     const torso=new THREE.Group();hips.add(torso);j.torso=torso;
-    const tMat=c.tTex?matTex(c.tTex,0.65):matFabric(c.torso,0.65);
-    const tM=addO(torso,new THREE.Mesh(new THREE.BoxGeometry(0.42*S,0.42*S,0.23*S),tMat));
+    const tMat=c.tTex?matTex(c.tTex):matFabric(c.torso);
+    const torsoGeo=new THREE.CylinderGeometry(0.2*S,0.22*S,0.42*S,10);
+    torsoGeo.scale(1,1,0.62);
+    const tM=addO(torso,new THREE.Mesh(torsoGeo,tMat));
     tM.position.y=0.22*S;tM.castShadow=true;ms.torso=tM;
 
-    // Chest
+    // Chest (wider at shoulders, organic shape)
     const chest=new THREE.Group();chest.position.y=0.44*S;torso.add(chest);j.chest=chest;
-    const cMat=c.cTex?matTex(c.cTex,0.6):matFabric(c.chest||c.torso,0.6);
-    const cM=addO(chest,new THREE.Mesh(new THREE.BoxGeometry(0.46*S,0.28*S,0.25*S),cMat));
+    const cMat=c.cTex?matTex(c.cTex):matFabric(c.chest||c.torso);
+    const chestGeo=new THREE.CylinderGeometry(0.24*S,0.2*S,0.28*S,10);
+    chestGeo.scale(1,1,0.6);
+    const cM=addO(chest,new THREE.Mesh(chestGeo,cMat));
     cM.position.y=0.14*S;cM.castShadow=true;
 
-    // Neck
-    const neckM=new THREE.Mesh(new THREE.CylinderGeometry(0.055*S,0.07*S,0.08*S,8),matSkin(c.skin,0.5));
-    neckM.position.y=0.3*S;
+    // Collar bone area
+    const collarGeo=new THREE.CylinderGeometry(0.26*S,0.24*S,0.06*S,10);
+    collarGeo.scale(1,1,0.55);
+    const collarM=new THREE.Mesh(collarGeo,cMat);
+    collarM.position.y=0.28*S;chest.add(collarM);
+
+    // Neck (more segments)
+    const neckM=new THREE.Mesh(new THREE.CylinderGeometry(0.05*S,0.065*S,0.1*S,10),matSkin(c.skin));
+    neckM.position.y=0.32*S;
     addO(chest,neckM);
 
-    // Head
-    const head=new THREE.Group();head.position.y=0.38*S;chest.add(head);j.head=head;
-    const hGeo=new THREE.SphereGeometry(0.165*S,14,12);hGeo.scale(1,1.12,0.96);
-    const hM=addO(head,new THREE.Mesh(hGeo,matSkin(c.skin,0.45)));
+    // Head (higher poly for smoother face)
+    const head=new THREE.Group();head.position.y=0.4*S;chest.add(head);j.head=head;
+    const hGeo=new THREE.SphereGeometry(0.17*S,18,14);hGeo.scale(1,1.1,0.97);
+    const hM=addO(head,new THREE.Mesh(hGeo,matSkin(c.skin)));
     hM.position.y=0.17*S;hM.castShadow=true;ms.head=hM;
 
-    // Eyes (3-layer: white, iris, pupil)
-    [[-1],[1]].forEach(([sx])=>{
-        const ew=new THREE.Mesh(new THREE.SphereGeometry(0.034*S,8,6),glowM(0xFFFFFF));
-        ew.position.set(sx*0.058*S,0.2*S,0.14*S);head.add(ew);
-        const ir=new THREE.Mesh(new THREE.SphereGeometry(0.024*S,8,6),glowM(c.eyes));
-        ir.position.set(sx*0.058*S,0.2*S,0.155*S);head.add(ir);
-        const pup=new THREE.Mesh(new THREE.SphereGeometry(0.012*S,6,6),glowM(0x000000));
-        pup.position.set(sx*0.058*S,0.2*S,0.17*S);head.add(pup);
+    // Cheek definition
+    [-1,1].forEach(s=>{
+        const cheek=new THREE.Mesh(new THREE.SphereGeometry(0.06*S,8,6),matSkin(c.skin));
+        cheek.position.set(s*0.1*S,0.12*S,0.08*S);cheek.scale.set(0.8,0.7,0.5);head.add(cheek);
     });
-    // Nose
-    const nose=new THREE.Mesh(new THREE.ConeGeometry(0.012*S,0.03*S,6),matSkin(c.skin,0.45));
-    nose.position.set(0,0.155*S,0.165*S);nose.rotation.x=-0.3;head.add(nose);
-    // Mouth
-    const mouthM=new THREE.Mesh(new THREE.BoxGeometry(0.035*S,0.006*S,0.005*S),glowM(0x553333));
-    mouthM.position.set(0,0.1*S,0.155*S);head.add(mouthM);
+
+    // Eyes (5-layer anime style: outline, white, iris gradient, pupil, catch light)
+    [[-1],[1]].forEach(([sx])=>{
+        // Eye outline (dark ring around the eye)
+        const eo=new THREE.Mesh(new THREE.SphereGeometry(0.038*S,10,8),glowM(0x0A0A18));
+        eo.position.set(sx*0.058*S,0.2*S,0.135*S);eo.scale.set(1,0.85,0.4);head.add(eo);
+        // White sclera (larger for anime look)
+        const ew=new THREE.Mesh(new THREE.SphereGeometry(0.036*S,10,8),glowM(0xFAFAFF));
+        ew.position.set(sx*0.058*S,0.2*S,0.14*S);ew.scale.set(1,0.82,0.4);head.add(ew);
+        // Iris (larger, vivid color)
+        const ir=new THREE.Mesh(new THREE.SphereGeometry(0.026*S,10,8),glowM(c.eyes));
+        ir.position.set(sx*0.058*S,0.2*S,0.157*S);ir.scale.set(1,1,0.5);head.add(ir);
+        // Pupil (sharp black center)
+        const pup=new THREE.Mesh(new THREE.SphereGeometry(0.013*S,8,6),glowM(0x000000));
+        pup.position.set(sx*0.058*S,0.2*S,0.168*S);head.add(pup);
+        // Anime catch light (white highlight dot - signature anime look)
+        const cl=new THREE.Mesh(new THREE.SphereGeometry(0.008*S,6,6),glowM(0xFFFFFF));
+        cl.position.set(sx*0.045*S,0.212*S,0.172*S);head.add(cl);
+        // Secondary smaller catch light
+        const cl2=new THREE.Mesh(new THREE.SphereGeometry(0.005*S,4,4),glowM(0xFFFFFF));
+        cl2.position.set(sx*0.068*S,0.19*S,0.172*S);head.add(cl2);
+    });
+    // Nose (anime style - small triangular shadow)
+    const nose=new THREE.Mesh(new THREE.ConeGeometry(0.014*S,0.032*S,4),matSkin(c.skin));
+    nose.position.set(0,0.155*S,0.17*S);nose.rotation.x=-0.35;head.add(nose);
+    // Nose shadow (subtle anime style)
+    const noseSh=new THREE.Mesh(new THREE.ConeGeometry(0.008*S,0.018*S,3),glowM(0x8B6B5A));
+    noseSh.position.set(0,0.145*S,0.172*S);noseSh.rotation.x=-0.2;head.add(noseSh);
+    // Mouth (more defined anime style)
+    const mouthM=new THREE.Mesh(new THREE.BoxGeometry(0.038*S,0.007*S,0.006*S),glowM(0x553333));
+    mouthM.position.set(0,0.1*S,0.16*S);head.add(mouthM);
+    // Mouth outline
+    const mouthO=new THREE.Mesh(new THREE.BoxGeometry(0.042*S,0.01*S,0.007*S),glowM(0x0A0A18));
+    mouthO.position.set(0,0.1*S,0.156*S);head.add(mouthO);
     // Lower lip hint
-    const lip=new THREE.Mesh(new THREE.BoxGeometry(0.028*S,0.004*S,0.004*S),matSkin(c.skin,0.45));
-    lip.position.set(0,0.093*S,0.155*S);head.add(lip);
+    const lip=new THREE.Mesh(new THREE.BoxGeometry(0.03*S,0.005*S,0.005*S),matSkin(c.skin));
+    lip.position.set(0,0.093*S,0.16*S);head.add(lip);
     // Ears
     [-1,1].forEach(s=>{
-        const ear=new THREE.Mesh(new THREE.SphereGeometry(0.025*S,8,6,0,Math.PI),matSkin(c.skin,0.45));
+        const ear=new THREE.Mesh(new THREE.SphereGeometry(0.025*S,8,6,0,Math.PI),matSkin(c.skin));
         ear.position.set(s*0.16*S,0.18*S,0.02*S);
         ear.rotation.y=s*0.3;ear.scale.set(0.5,1,0.7);
         head.add(ear);
     });
     // Chin definition
-    const chin=new THREE.Mesh(new THREE.SphereGeometry(0.04*S,8,6),matSkin(c.skin,0.45));
+    const chin=new THREE.Mesh(new THREE.SphereGeometry(0.04*S,8,6),matSkin(c.skin));
     chin.position.set(0,0.06*S,0.1*S);chin.scale.set(1.2,0.6,0.8);head.add(chin);
-    // Eyebrows
+    // Eyebrows (thicker, more expressive anime style)
     [[-1],[1]].forEach(([sx])=>{
-        const brow=new THREE.Mesh(new THREE.BoxGeometry(0.04*S,0.008*S,0.008*S),mat(c.hair||0x222222,0.6));
-        brow.position.set(sx*0.055*S,0.235*S,0.15*S);
-        brow.rotation.z=sx*-0.12;
+        const brow=new THREE.Mesh(new THREE.BoxGeometry(0.048*S,0.012*S,0.01*S),mat(c.hair||0x222222,0.6));
+        brow.position.set(sx*0.055*S,0.24*S,0.152*S);
+        brow.rotation.z=sx*-0.15;
         head.add(brow);
+        // Eyebrow outline
+        const browO=new THREE.Mesh(new THREE.BoxGeometry(0.052*S,0.016*S,0.012*S),glowM(0x0A0A18));
+        browO.position.set(sx*0.055*S,0.24*S,0.148*S);
+        browO.rotation.z=sx*-0.15;
+        head.add(browO);
     });
 
-    // Hair
+    // Hair (Advanced strand-based system with TubeGeometry)
     if(c.hair){
         const hg=new THREE.Group();hg.position.y=0.23*S;head.add(hg);j.hair=hg;
-        const hMat=mat(c.hair,0.55,0,c.hairEm||null,c.hairEm?0.25:0);
-        // Cap
-        const cap=new THREE.Mesh(new THREE.SphereGeometry(0.19*S,12,8,0,Math.PI*2,0,Math.PI*0.68),hMat);
-        cap.rotation.x=-0.1;addO(hg,cap);
-        // Side volume
-        [-1,1].forEach(s=>{const sv=new THREE.Mesh(new THREE.BoxGeometry(0.05*S,0.14*S,0.1*S),hMat);sv.position.set(s*0.16*S,-0.04*S,0.03*S);hg.add(sv)});
-        // Bangs (increased density with variation)
-        const bMat=mat(c.hairTip||c.hair,0.55);
-        for(let i=0;i<12;i++){
-            const w=0.025+Math.random()*0.015;
-            const h=0.07+Math.random()*0.05;
-            const b=new THREE.Mesh(new THREE.BoxGeometry(w*S,h*S,0.02*S),i%3===0?bMat:mat(c.hair,0.55));
-            b.position.set((-0.12+i*0.022)*S,(0.02-Math.random()*0.02)*S,(0.15+Math.random()*0.01)*S);
-            b.rotation.x=0.12+Math.random()*0.1;b.rotation.z=(Math.random()-0.5)*0.15;
-            hg.add(b);
+        const hMat=matToon(c.hair,c.hairEm||null,c.hairEm?0.25:0);
+        const hTipMat=matToon(c.hairTip||c.hair,c.hairEm||null,c.hairEm?0.35:0);
+
+        // Helper: create a hair strand using TubeGeometry with CatmullRomCurve3
+        function mkStrand(pts,radius,tipRadius,segments,useTip){
+            const curve=new THREE.CatmullRomCurve3(pts.map(p=>new THREE.Vector3(p[0]*S,p[1]*S,p[2]*S)));
+            const geo=new THREE.TubeGeometry(curve,segments||8,radius*S,5,false);
+            const m=new THREE.Mesh(geo,useTip?hTipMat:hMat);
+            m.castShadow=true;hg.add(m);return m;
         }
-        // Back hair volume
-        for(let i=0;i<4;i++){
-            const bh=new THREE.Mesh(new THREE.BoxGeometry((0.06+Math.random()*0.03)*S,(0.12+Math.random()*0.08)*S,0.025*S),mat(c.hair,0.55));
-            bh.position.set((-0.06+i*0.04)*S,(-0.05-Math.random()*0.04)*S,(-0.12-Math.random()*0.03)*S);
-            bh.rotation.x=-0.2-Math.random()*0.15;
-            hg.add(bh);
+
+        // Main hair cap (smoother, more segments)
+        const cap=new THREE.Mesh(new THREE.SphereGeometry(0.2*S,16,12,0,Math.PI*2,0,Math.PI*0.65),hMat);
+        cap.rotation.x=-0.08;addO(hg,cap);
+
+        // Top volume layers (anime fluffy hair)
+        const topVol=new THREE.Mesh(new THREE.SphereGeometry(0.17*S,10,8,0,Math.PI*2,0,Math.PI*0.45),hMat);
+        topVol.position.set(0,0.06*S,0.03*S);topVol.scale.set(1.15,0.7,1.1);hg.add(topVol);
+
+        // Side volume (rounded, not boxy)
+        [-1,1].forEach(s=>{
+            const sv=new THREE.Mesh(new THREE.SphereGeometry(0.07*S,8,6),hMat);
+            sv.position.set(s*0.15*S,-0.03*S,0.04*S);sv.scale.set(0.7,1.2,0.9);hg.add(sv);
+        });
+
+        // Bangs: flowing tube strands instead of boxes
+        const bangCount=def.spk>6?10:14;
+        for(let i=0;i<bangCount;i++){
+            const xBase=-0.11+i*(0.22/bangCount);
+            const len=0.08+Math.random()*0.06;
+            const curve=Math.random()*0.03-0.015;
+            const isTip=i%2===0;
+            mkStrand([
+                [xBase, 0.02, 0.14],
+                [xBase+curve, 0.02-len*0.4, 0.16+len*0.2],
+                [xBase+curve*2, 0.02-len, 0.15+len*0.5]
+            ],0.012-i*0.0003,0.006,6,isTip);
         }
-        // Spikes
+
+        // Back hair: flowing strands cascading down
+        const backCount=c.hairLong?10:6;
+        const backLen=c.hairLong?0.35:0.15;
+        for(let i=0;i<backCount;i++){
+            const xBase=-0.08+i*(0.16/backCount);
+            const len=backLen+Math.random()*0.08;
+            const sway=Math.random()*0.04-0.02;
+            mkStrand([
+                [xBase, -0.02, -0.14],
+                [xBase+sway, -0.02-len*0.35, -0.16-len*0.15],
+                [xBase+sway*2, -0.02-len*0.7, -0.15-len*0.08],
+                [xBase+sway*2.5, -0.02-len, -0.13]
+            ],0.015,0.008,8,i%3===0);
+        }
+
+        // Spikes (upgraded: cone + tube hybrid for anime spike hair)
         if(def.spk){for(let i=0;i<def.spk;i++){
-            const h=0.1+Math.random()*0.12;
-            const sp=new THREE.Mesh(new THREE.ConeGeometry(0.03*S,h*S,4),mat(c.hairTip||c.hair,0.5));
+            const h=0.12+Math.random()*0.14;
             const a=(i/def.spk)*Math.PI*1.5-0.4;
-            sp.position.set(Math.sin(a)*0.14*S,0.06*S,Math.cos(a)*0.1*S);
-            sp.rotation.x=Math.cos(a)*0.5;sp.rotation.z=-Math.sin(a)*0.6;
-            hg.add(sp);
+            const sx=Math.sin(a)*0.14,sz=Math.cos(a)*0.1;
+            // Spike as tube strand pointing outward
+            mkStrand([
+                [sx, 0.04, sz],
+                [sx*1.4, 0.04+h*0.5, sz*1.3],
+                [sx*1.7, 0.04+h, sz*1.5]
+            ],0.018,0.005,6,true);
         }}
+
+        // Hair highlight shine (anime light reflection strip)
+        const shine=new THREE.Mesh(
+            new THREE.PlaneGeometry(0.22*S,0.04*S),
+            new THREE.MeshBasicMaterial({color:0xFFFFFF,transparent:true,opacity:0.12,side:THREE.DoubleSide})
+        );
+        shine.position.set(0,0.1*S,0.19*S);shine.rotation.x=-0.3;hg.add(shine);
     }
 
-    // Arms
+    // Arms (smoother with more segments)
     ['L','R'].forEach((sd,si)=>{
         const sg=si===0?-1:1;
         const sh=new THREE.Group();sh.position.set(sg*0.27*S,0.2*S,0);chest.add(sh);j['sh'+sd]=sh;
-        addO(sh,new THREE.Mesh(new THREE.SphereGeometry(0.065*S,8,6),mat(c.sleeve||c.torso,0.6)));
-        const ua=addO(sh,new THREE.Mesh(new THREE.CylinderGeometry(0.055*S,0.05*S,0.3*S,8),mat(c.sleeve||c.torso,0.6)));
+        // Shoulder ball joint (smoother sphere)
+        addO(sh,new THREE.Mesh(new THREE.SphereGeometry(0.07*S,10,8),mat(c.sleeve||c.torso,0.6)));
+        // Upper arm (more segments for smoother silhouette)
+        const ua=addO(sh,new THREE.Mesh(new THREE.CylinderGeometry(0.058*S,0.048*S,0.3*S,10),mat(c.sleeve||c.torso,0.6)));
         ua.position.y=-0.16*S;ua.castShadow=true;
         const el=new THREE.Group();el.position.y=-0.32*S;sh.add(el);j['el'+sd]=el;
-        const la=addO(el,new THREE.Mesh(new THREE.CylinderGeometry(0.05*S,0.042*S,0.26*S,8),mat(c.arm||c.skin,0.55)));
+        // Elbow joint sphere
+        const elbowBall=new THREE.Mesh(new THREE.SphereGeometry(0.04*S,8,6),mat(c.arm||c.skin,0.55));
+        el.add(elbowBall);
+        const la=addO(el,new THREE.Mesh(new THREE.CylinderGeometry(0.048*S,0.04*S,0.26*S,10),mat(c.arm||c.skin,0.55)));
         la.position.y=-0.13*S;la.castShadow=true;
         // Wrist
         const wrist=new THREE.Mesh(new THREE.CylinderGeometry(0.044*S,0.044*S,0.035*S,8),mat(c.wr||0xEEEEEE,0.7));
         wrist.position.set(0,-0.26*S,0);el.add(wrist);
-        const hand=new THREE.Mesh(new THREE.SphereGeometry(0.035*S,8,6),matSkin(c.skin,0.45));
+        const hand=new THREE.Mesh(new THREE.SphereGeometry(0.035*S,8,6),matSkin(c.skin));
         hand.position.y=-0.3*S;el.add(hand);j['hd'+sd]=hand;
         // Fingers (4 per hand)
         for(let fi=0;fi<4;fi++){
-            const finger=new THREE.Mesh(new THREE.CylinderGeometry(0.005*S,0.004*S,0.035*S,4),matSkin(c.skin,0.45));
+            const finger=new THREE.Mesh(new THREE.CylinderGeometry(0.005*S,0.004*S,0.035*S,4),matSkin(c.skin));
             finger.position.set((-0.012+fi*0.008)*S,-0.335*S,0.015*S);
             finger.rotation.x=0.3;
             el.add(finger);
         }
         // Thumb
-        const thumb=new THREE.Mesh(new THREE.CylinderGeometry(0.006*S,0.005*S,0.025*S,4),matSkin(c.skin,0.45));
+        const thumb=new THREE.Mesh(new THREE.CylinderGeometry(0.006*S,0.005*S,0.025*S,4),matSkin(c.skin));
         thumb.position.set(sg*0.02*S,-0.3*S,0.02*S);
         thumb.rotation.x=0.4;thumb.rotation.z=sg*-0.5;
         el.add(thumb);
     });
 
-    // Legs
+    // Legs (smoother with knee joints)
     ['L','R'].forEach((sd,si)=>{
         const sg=si===0?-1:1;
         const hp=new THREE.Group();hp.position.set(sg*0.1*S,-0.04*S,0);hips.add(hp);j['hp'+sd]=hp;
-        const ul=addO(hp,new THREE.Mesh(new THREE.CylinderGeometry(0.075*S,0.06*S,0.38*S,8),matFabric(c.pants,0.7)));
+        // Hip joint sphere
+        const hipBall=new THREE.Mesh(new THREE.SphereGeometry(0.055*S,8,6),matFabric(c.pants));
+        hp.add(hipBall);
+        const ul=addO(hp,new THREE.Mesh(new THREE.CylinderGeometry(0.075*S,0.058*S,0.38*S,10),matFabric(c.pants)));
         ul.position.y=-0.19*S;ul.castShadow=true;
         const kn=new THREE.Group();kn.position.y=-0.38*S;hp.add(kn);j['kn'+sd]=kn;
-        const ll=addO(kn,new THREE.Mesh(new THREE.CylinderGeometry(0.06*S,0.05*S,0.34*S,8),mat(c.lw||c.pants,0.7)));
+        // Knee joint sphere
+        const kneeBall=new THREE.Mesh(new THREE.SphereGeometry(0.045*S,8,6),mat(c.lw||c.pants,0.7));
+        kn.add(kneeBall);
+        const ll=addO(kn,new THREE.Mesh(new THREE.CylinderGeometry(0.058*S,0.048*S,0.34*S,10),mat(c.lw||c.pants,0.7)));
         ll.position.y=-0.17*S;ll.castShadow=true;
         // Shin wrap
-        const sw=new THREE.Mesh(new THREE.CylinderGeometry(0.053*S,0.053*S,0.05*S,8),mat(c.wr||0xE8E8E8,0.7));
+        const sw=new THREE.Mesh(new THREE.CylinderGeometry(0.051*S,0.051*S,0.05*S,8),mat(c.wr||0xE8E8E8,0.7));
         sw.position.set(0,-0.32*S,0);kn.add(sw);
-        // Foot
-        const ft=new THREE.Mesh(new THREE.BoxGeometry(0.075*S,0.04*S,0.14*S),mat(c.shoes||0x1a1a1a,0.8));
-        ft.position.set(0,-0.38*S,0.02*S);kn.add(ft);
+        // Foot (anatomic shape: heel + toe)
+        const footGeo=new THREE.CylinderGeometry(0.04*S,0.035*S,0.14*S,8);
+        footGeo.rotateX(Math.PI/2);
+        const ft=new THREE.Mesh(footGeo,mat(c.shoes||0x1a1a1a,0.8));
+        ft.position.set(0,-0.37*S,0.03*S);kn.add(ft);
+        // Toe cap
+        const toe=new THREE.Mesh(new THREE.SphereGeometry(0.035*S,6,4,0,Math.PI*2,0,Math.PI/2),mat(c.shoes||0x1a1a1a,0.8));
+        toe.position.set(0,-0.37*S,0.1*S);toe.rotation.x=-Math.PI/2;kn.add(toe);
         j['ft'+sd]=kn;
     });
 
@@ -1398,12 +1635,22 @@ function buildChar(def){
         if(j.hdR)j.hdR.add(wg);else if(j.elR)j.elR.add(wg);
     }
 
-    // Haori / Cape
+    // Haori / Cape (3D volume - visible from 3/4 angle)
     if(c.haori||c.hTex){
         const hMat=c.hTex?new THREE.MeshStandardMaterial({map:c.hTex,roughness:0.6,side:THREE.DoubleSide}):new THREE.MeshStandardMaterial({color:c.haori,roughness:0.6,side:THREE.DoubleSide});
-        const back=new THREE.Mesh(new THREE.PlaneGeometry(0.52*S,0.68*S,4,8),hMat);
-        back.position.set(0,0.08*S,-0.14*S);torso.add(back);ms.haori=back;
-        [-1,1].forEach(s=>{const sf=new THREE.Mesh(new THREE.PlaneGeometry(0.14*S,0.62*S,2,6),hMat);sf.position.set(s*0.27*S,0.08*S,-0.01*S);sf.rotation.y=s*Math.PI/2;torso.add(sf)});
+        // Back panel (slightly curved with depth)
+        const back=new THREE.Mesh(new THREE.PlaneGeometry(0.54*S,0.72*S,6,10),hMat);
+        back.position.set(0,0.06*S,-0.15*S);torso.add(back);ms.haori=back;
+        // Side panels (wider, more visible in 3/4 view)
+        [-1,1].forEach(s=>{
+            const sf=new THREE.Mesh(new THREE.PlaneGeometry(0.18*S,0.66*S,3,8),hMat);
+            sf.position.set(s*0.28*S,0.06*S,-0.02*S);sf.rotation.y=s*Math.PI/2.2;torso.add(sf);
+        });
+        // Front flaps (visible when character turns)
+        [-1,1].forEach(s=>{
+            const ff=new THREE.Mesh(new THREE.PlaneGeometry(0.1*S,0.58*S,2,6),hMat);
+            ff.position.set(s*0.24*S,0.04*S,0.1*S);ff.rotation.y=s*Math.PI/3;torso.add(ff);
+        });
     }
 
     // Decorations
@@ -1417,15 +1664,50 @@ function buildChar(def){
 // CHARACTER DATA
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const CH=[
-{name:'Tanjiro',full:'Tanjiro Kamado',alias:'Benji Sakamoto',type:'All-Rounder',hp:1000,spd:0.07,jmp:0.22,sc:1,col:'#2D5A27',vfx:0x00BFFF,wt:'katana',spk:6,
-c3d:{skin:0xF5D0A9,hair:0x8B2252,hairTip:0xA03060,eyes:0x6B1C2A,
-torso:0x1A1A1A,chest:0x2D5A27,tTex:mkChecker('#1A1A1A','#2D5A27'),cTex:mkChecker('#1A1A1A','#2D5A27'),
-sleeve:0x1A1A1A,arm:0x2D5A27,pants:0x3A2520,lw:0x3A2520,wr:0xE8E8E8,belt:0xE8E8E8,shoes:0x2A1A1A,
-wpn:0x222222,wpnEdge:0x555555,wpnG:0x665544,hdl:0x1A1A2A,hTex:mkChecker('#1A1A1A','#2D5A27')},
+{name:'Tanjiro',full:'Tanjiro Kamado',alias:'Benji Sakamoto',type:'All-Rounder',hp:1000,spd:0.07,jmp:0.22,sc:1,col:'#4EB18D',vfx:0x00BFFF,wt:'katana',spk:6,
+c3d:{skin:0xF9D4AF,hair:0x5A3536,hairTip:0x7C3A43,eyes:0x6B1C2A,
+torso:0x2E2723,chest:0x4EB18D,tTex:mkChecker('#2E2723','#4EB18D'),cTex:mkChecker('#2E2723','#4EB18D'),
+sleeve:0x2E2723,arm:0x4EB18D,pants:0x3A2520,lw:0x3A2520,wr:0xE8E8E8,belt:0xE8E8E8,shoes:0x2A1A1A,
+wpn:0x222222,wpnEdge:0x555555,wpnG:0x665544,hdl:0x1A1A2A,hTex:mkChecker('#2E2723','#4EB18D')},
 deco:(r,j,hd,ch,c,s)=>{
-    [-1,1].forEach(sx=>{const e=new THREE.Mesh(new THREE.PlaneGeometry(0.025*s,0.045*s),new THREE.MeshBasicMaterial({color:0xFF3030,side:THREE.DoubleSide}));e.position.set(sx*0.18*s,0.12*s,0);hd.add(e)});
-    mk(hd,new THREE.PlaneGeometry(0.04*s,0.018*s),new THREE.MeshBasicMaterial({color:0xCC2222,side:THREE.DoubleSide}),-0.04*s,0.28*s,0.15*s);
+    // Hanafuda earrings (rectangular with sun circle design)
+    [-1,1].forEach(sx=>{
+        // Earring chain
+        const chain=new THREE.Mesh(new THREE.CylinderGeometry(0.002*s,0.002*s,0.03*s,4),mat(0xC0C0C0,0.3,0.5));
+        chain.position.set(sx*0.17*s,0.14*s,0.02*s);hd.add(chain);
+        // Earring card (off-white rectangular)
+        const card=new THREE.Mesh(new THREE.PlaneGeometry(0.022*s,0.04*s),new THREE.MeshBasicMaterial({color:0xFFF8E7,side:THREE.DoubleSide}));
+        card.position.set(sx*0.17*s,0.105*s,0.02*s);hd.add(card);
+        // Sun circle on earring
+        const sun=new THREE.Mesh(new THREE.CircleGeometry(0.006*s,8),new THREE.MeshBasicMaterial({color:0xCC2222,side:THREE.DoubleSide}));
+        sun.position.set(sx*0.17*s,0.112*s,0.025*s);hd.add(sun);
+        // Sun rays (lines)
+        for(let i=0;i<4;i++){
+            const ray=new THREE.Mesh(new THREE.PlaneGeometry(0.002*s,0.012*s),new THREE.MeshBasicMaterial({color:0xCC2222,side:THREE.DoubleSide}));
+            ray.position.set(sx*0.17*s,0.112*s,0.026*s);
+            ray.rotation.z=i*Math.PI/4;hd.add(ray);
+        }
+    });
+    // Demon Slayer Mark (flame-shaped scar with subtle glow)
+    const markMat=new THREE.MeshBasicMaterial({color:0xAA2244,side:THREE.DoubleSide});
+    const markGlow=new THREE.MeshBasicMaterial({color:0xFF3355,transparent:true,opacity:0.3,side:THREE.DoubleSide});
+    // Main flame shape (multiple overlapping pieces)
+    mk(hd,new THREE.PlaneGeometry(0.04*s,0.03*s),markMat,-0.02*s,0.28*s,0.168*s);
+    // Flame tip pointing up
+    const flameTip=new THREE.Mesh(new THREE.ConeGeometry(0.012*s,0.025*s,3),markMat);
+    flameTip.position.set(-0.02*s,0.3*s,0.168*s);flameTip.rotation.x=-Math.PI/2;hd.add(flameTip);
+    // Side flame lick
+    mk(hd,new THREE.PlaneGeometry(0.015*s,0.02*s),markMat,-0.04*s,0.275*s,0.168*s,0,0,0.3);
+    // Glow aura around mark
+    mk(hd,new THREE.PlaneGeometry(0.06*s,0.05*s),markGlow,-0.02*s,0.285*s,0.166*s);
+    // White collar visible under haori
+    mk(ch,new THREE.CylinderGeometry(0.22*s,0.2*s,0.04*s,8),new THREE.MeshToonMaterial({color:0xF5F5F0,gradientMap:toonGradMap}),0,0.3*s,0,0,0,0,1,1,0.6);
+    // Backpack (wooden box on back with straps)
     mk(ch,new THREE.BoxGeometry(0.22*s,0.28*s,0.18*s),mat(0xC4943A,0.75),0,0.12*s,-0.24*s);
+    // Backpack straps
+    [-1,1].forEach(sx=>{
+        mk(ch,new THREE.BoxGeometry(0.02*s,0.32*s,0.015*s),mat(0x8B6B3A,0.7),sx*0.08*s,0.18*s,-0.12*s);
+    });
 },
 mv:{
     l:{n:'Jab',su:5,ac:3,rc:10,dm:30,hs:12,bs:8,kb:{x:.1,y:0},hb:{x:.3,y:1.3,w:.5,h:.3,d:.3}},
@@ -1435,38 +1717,75 @@ mv:{
     s2:{n:'Hinokami Kagura',in:'dp',su:6,ac:8,rc:25,dm:120,hs:28,bs:10,kb:{x:.15,y:.18},hb:{x:.1,y:.8,w:.6,h:1.2,d:.5},vt:'fire'},
     su:{n:'Constant Flux',in:'qcf2',su:8,ac:15,rc:30,dm:200,hs:40,bs:25,kb:{x:.35,y:.1},hb:{x:.2,y:.8,w:1.5,h:.8,d:.6},vt:'water',sp:1}
 }},
-{name:'Nezuko',full:'Nezuko Kamado',alias:'Logan Rutes Inusaki',type:'Rushdown',hp:950,spd:0.08,jmp:0.24,sc:0.95,col:'#FFB6C1',vfx:0xFF1493,wt:null,spk:0,
-c3d:{skin:0xFFF0E8,hair:0x1A1A1A,hairTip:0xFF6347,eyes:0xFF69B4,
-torso:0xFFB6C1,chest:0xE8899A,tTex:mkAsanoha(),sleeve:0xFFB6C1,arm:0xFFF0E8,pants:0xDD6688,belt:0x722F37,wr:0xFFB6C1,shoes:0xFFB6C1},
+{name:'Nezuko',full:'Nezuko Kamado',alias:'Logan Rutes Inusaki',type:'Rushdown',hp:950,spd:0.08,jmp:0.24,sc:0.95,col:'#F6BBBE',vfx:0xFF1493,wt:null,spk:0,
+c3d:{skin:0xFEF3F0,hair:0x49373B,hairTip:0xC56742,hairLong:true,eyes:0xFF69B4,
+torso:0xF6BBBE,chest:0xC56742,tTex:mkAsanoha(),sleeve:0xF6BBBE,arm:0xFEF3F0,pants:0xC56742,belt:0x722F37,wr:0xF6BBBE,shoes:0xF6BBBE},
 deco:(r,j,hd,ch,c,s)=>{
-    mk(hd,new THREE.CylinderGeometry(0.018*s,0.018*s,0.11*s,6),mat(0xD2B48C,0.7),0,0.1*s,0.15*s,0,0,Math.PI/2);
-    mk(hd,new THREE.SphereGeometry(0.12*s,6,6),mat(0xFF6347,0.5),0,0.15*s,0,0,0,0,1.1,0.5,1);
+    // Bamboo mouthpiece (sage green bamboo cylinder with joints)
+    const bamboo=new THREE.Group();
+    mk(bamboo,new THREE.CylinderGeometry(0.02*s,0.02*s,0.1*s,8),mat(0x9DAE7D,0.65),0,0,0,0,0,Math.PI/2);
+    // Bamboo joint rings
+    [-0.03,0.03].forEach(x=>mk(bamboo,new THREE.CylinderGeometry(0.023*s,0.023*s,0.008*s,8),mat(0x7D9E5D,0.6),x*s,0,0,0,0,Math.PI/2));
+    bamboo.position.set(0,0.1*s,0.17*s);hd.add(bamboo);
+    // Bamboo strap (pink ribbon around head)
+    mk(hd,new THREE.TorusGeometry(0.17*s,0.006*s,4,16),mat(0xFF69B4,0.5),0,0.12*s,0.02*s,Math.PI/2);
+    // Hair ribbon (pink bow on side)
+    mk(hd,new THREE.SphereGeometry(0.02*s,6,6),mat(0xFF69B4,0.5),0.14*s,0.22*s,0.05*s);
+    // Orange hair tips highlight volume
+    mk(hd,new THREE.SphereGeometry(0.1*s,6,6),mat(0xC56742,0.55),0,0.12*s,-0.06*s,0,0,0,1.1,0.5,1);
 },
 mv:{l:{n:'Quick Kick',su:4,ac:3,rc:9,dm:25,hs:11,bs:7,kb:{x:.08,y:0},hb:{x:.2,y:.6,w:.5,h:.3,d:.3}},m:{n:'Demon Kick',su:7,ac:5,rc:14,dm:55,hs:17,bs:11,kb:{x:.15,y:.03},hb:{x:.2,y:.8,w:.6,h:.5,d:.4}},h:{n:'Axe Kick',su:12,ac:5,rc:20,dm:90,hs:24,bs:16,kb:{x:.1,y:.1},hb:{x:.15,y:.5,w:.5,h:.9,d:.4}},s1:{n:'Exploding Blood',in:'qcf',su:12,ac:8,rc:22,dm:85,hs:22,bs:15,kb:{x:.2,y:.05},hb:{x:.3,y:.8,w:1,h:.6,d:.5},vt:'blood'},s2:{n:'Demon Rush',in:'dp',su:5,ac:10,rc:24,dm:100,hs:26,bs:12,kb:{x:.3,y:.02},hb:{x:.2,y:.8,w:.8,h:.5,d:.4},vt:'blood'},su:{n:'Full Demon Form',in:'qcf2',su:6,ac:18,rc:28,dm:220,hs:42,bs:22,kb:{x:.35,y:.12},hb:{x:.1,y:.6,w:1.2,h:1,d:.6},vt:'blood',sp:1}}},
 {name:'Zenitsu',full:'Zenitsu Agatsuma',alias:'Arthur Heirashyra',type:'Glass Cannon',hp:850,spd:0.06,jmp:0.22,sc:1,col:'#FFD700',vfx:0xFFD700,wt:'katana',spk:8,
-c3d:{skin:0xF5D0A9,hair:0xFFD700,hairTip:0xDAA520,eyes:0xDAA520,torso:0x1B1B3A,chest:0x1B1B3A,sleeve:0xFF8C00,arm:0xFFD700,pants:0x1B1B3A,belt:0xE8E8E8,wr:0xE8E8E8,shoes:0x2A1A1A,wpn:0xFFD700,wpnEdge:0xFFF8DC,wpnEm:0xFFD700,wpnG:0xFFFFFF,hdl:0x1A1A2A,haori:0xFF8C00},deco:null,
+c3d:{skin:0xF5D0A9,hair:0xF9E179,hairTip:0xE48A32,eyes:0xDAA520,torso:0x3A2C20,chest:0x3A2C20,sleeve:0xE48A32,arm:0xF9E179,pants:0x3A2C20,belt:0xF5F3E6,wr:0xF5F3E6,shoes:0x2A1A1A,wpn:0xFFD700,wpnEdge:0xFFF8DC,wpnEm:0xFFD700,wpnG:0xFFFFFF,hdl:0x3A2C20,hTex:mkZenitsuTex()},deco:null,
 mv:{l:{n:'Panic Slash',su:6,ac:2,rc:11,dm:28,hs:11,bs:7,kb:{x:.06,y:0},hb:{x:.2,y:1.3,w:.4,h:.25,d:.3}},m:{n:'Thunder Draw',su:3,ac:2,rc:18,dm:70,hs:20,bs:14,kb:{x:.2,y:.02},hb:{x:.3,y:1.1,w:.8,h:.4,d:.4}},h:{n:'Thunderclap',su:2,ac:3,rc:28,dm:120,hs:28,bs:20,kb:{x:.35,y:.05},hb:{x:.3,y:1,w:1.2,h:.5,d:.4}},s1:{n:'Thunderclap Flash',in:'qcf',su:1,ac:3,rc:30,dm:100,hs:25,bs:8,kb:{x:.4,y:.03},hb:{x:.4,y:1.1,w:1.8,h:.4,d:.4},vt:'lightning'},s2:{n:'Sixfold',in:'dp',su:3,ac:12,rc:32,dm:150,hs:30,bs:10,kb:{x:.25,y:.1},hb:{x:.3,y:.8,w:1.5,h:.6,d:.5},vt:'lightning'},su:{n:'Godspeed',in:'qcf2',su:1,ac:20,rc:40,dm:280,hs:45,bs:20,kb:{x:.5,y:.12},hb:{x:.3,y:.7,w:2.2,h:.8,d:.6},vt:'lightning',sp:1}}},
 {name:'Inosuke',full:'Inosuke Hashibira',alias:'Lorenzo Luffy',type:'Rushdown',hp:1050,spd:0.085,jmp:0.25,sc:1,col:'#4169E1',vfx:0x6A5ACD,wt:'dual',spk:0,
-c3d:{skin:0xE8C8A0,hair:0x1A1A1A,hairTip:0x4169E1,eyes:0x2E8B57,torso:0xE8C8A0,chest:0xE8C8A0,sleeve:0xE8C8A0,arm:0xE8C8A0,pants:0x1B1B3A,belt:0x8B7D6B,wr:0x8B7D6B,shoes:0xF5F5DC,wpn:0x483D8B,wpnEdge:0x6A5ACD},
+c3d:{skin:0xE8C8A0,hair:0x2B3A67,hairTip:0x4169E1,eyes:0x2E8B57,torso:0xE8C8A0,chest:0xE8C8A0,sleeve:0xE8C8A0,arm:0xE8C8A0,pants:0x2A2040,belt:0x8B7D6B,wr:0x8B7D6B,shoes:0xF5F5DC,wpn:0x483D8B,wpnEdge:0x6A5ACD},
 deco:(r,j,hd,ch,c,s)=>{
+    // Boar mask (layered for realism)
     const mskMat=mat(0x8B7D6B,0.75);
-    const ms2=new THREE.Mesh(new THREE.SphereGeometry(0.19*s,8,6),mskMat);ms2.scale.set(1.2,1,1.3);ms2.position.set(0,0.2*s,0.04*s);addO(hd,ms2);
-    [-1,1].forEach(sx=>{mk(hd,new THREE.ConeGeometry(0.018*s,0.07*s,4),mat(0xFFFFF0,0.5),sx*0.11*s,0.08*s,0.17*s,0.3)});
+    const mskDark=mat(0x6B5D4B,0.8);
+    // Main mask skull shape
+    const ms2=new THREE.Mesh(new THREE.SphereGeometry(0.2*s,10,8),mskMat);ms2.scale.set(1.25,1.05,1.35);ms2.position.set(0,0.2*s,0.04*s);addO(hd,ms2);
+    // Snout (elongated front)
+    mk(hd,new THREE.CylinderGeometry(0.05*s,0.07*s,0.1*s,8),mskDark,0,0.12*s,0.2*s,Math.PI/2);
+    // Nostrils
+    [-1,1].forEach(sx=>mk(hd,new THREE.SphereGeometry(0.012*s,6,4),glowM(0x2A1A1A),sx*0.025*s,0.12*s,0.26*s));
+    // Tusks (ivory, curved upward)
+    [-1,1].forEach(sx=>{
+        mk(hd,new THREE.ConeGeometry(0.014*s,0.08*s,5),mat(0xFFFFF0,0.4),sx*0.08*s,0.06*s,0.2*s,0.4,0,sx*-0.2);
+    });
+    // Mask eye holes (dark)
+    [-1,1].forEach(sx=>mk(hd,new THREE.SphereGeometry(0.025*s,6,6),glowM(0x4488DD),sx*0.07*s,0.22*s,0.2*s));
+    // Fur texture on top of mask
+    for(let i=0;i<6;i++){
+        const fur=new THREE.Mesh(new THREE.ConeGeometry(0.008*s,(0.03+Math.random()*0.02)*s,3),mat(0x7B6D5B,0.8));
+        fur.position.set((-0.05+i*0.02)*s,0.3*s,(0.05+Math.random()*0.04)*s);
+        fur.rotation.x=-0.4-Math.random()*0.3;hd.add(fur);
+    }
 },
 mv:{l:{n:'Fang Slash',su:4,ac:3,rc:9,dm:28,hs:11,bs:7,kb:{x:.08,y:0},hb:{x:.2,y:1.1,w:.6,h:.4,d:.4}},m:{n:'Cross Fang',su:7,ac:5,rc:14,dm:65,hs:18,bs:12,kb:{x:.15,y:.02},hb:{x:.2,y:1,w:.7,h:.6,d:.5}},h:{n:'Palisade Bite',su:10,ac:8,rc:18,dm:95,hs:23,bs:15,kb:{x:.12,y:.04},hb:{x:.15,y:.8,w:.8,h:.7,d:.5}},s1:{n:'Beast Rush',in:'qcf',su:6,ac:10,rc:20,dm:90,hs:22,bs:10,kb:{x:.35,y:.02},hb:{x:.3,y:.5,w:1.2,h:.5,d:.5},vt:'slash'},s2:{n:'Crazy Uppercut',in:'dp',su:5,ac:6,rc:26,dm:110,hs:28,bs:10,kb:{x:.1,y:.22},hb:{x:.1,y:.6,w:.5,h:1,d:.5},vt:'slash'},su:{n:'Sudden Throwing',in:'qcf2',su:4,ac:20,rc:30,dm:240,hs:45,bs:20,kb:{x:.3,y:.1},hb:{x:.1,y:.7,w:1.2,h:.8,d:.6},vt:'slash',sp:1}}},
 {name:'Giyu',full:'Giyu Tomioka',alias:'Chico Baleiro',type:'Defensive',hp:1000,spd:0.065,jmp:0.22,sc:1.02,col:'#722F37',vfx:0x1E90FF,wt:'katana',spk:0,
-c3d:{skin:0xF5D0A9,hair:0x0A0A2E,eyes:0x1E3A5F,torso:0x1B1B3A,chest:0x1B1B3A,sleeve:0x722F37,arm:0x2D5A27,pants:0x1B1B3A,belt:0xE8E8E8,wr:0xE8E8E8,shoes:0x2A1A1A,wpn:0x4682B4,wpnEdge:0x87CEEB,wpnG:0x888888,hTex:mkGiyuTex()},
-deco:(r,j,hd,ch,c,s)=>{mk(hd,new THREE.CylinderGeometry(0.025*s,0.015*s,0.18*s,4),mat(0x0A0A2E,0.6),0,0.14*s,-0.14*s,0.5)},
+c3d:{skin:0xF5D0A9,hair:0x0A0A2E,hairLong:true,eyes:0x1E3A5F,torso:0x1B1B3A,chest:0x1B1B3A,sleeve:0x722F37,arm:0x2D5A27,pants:0x1B1B3A,belt:0xE8E8E8,wr:0xE8E8E8,shoes:0x2A1A1A,wpn:0x4682B4,wpnEdge:0x87CEEB,wpnG:0x888888,hTex:mkGiyuTex()},
+deco:(r,j,hd,ch,c,s)=>{
+    // Ponytail (thicker, more visible)
+    mk(hd,new THREE.CylinderGeometry(0.03*s,0.018*s,0.22*s,6),mat(0x0A0A2E,0.55),0,0.1*s,-0.16*s,0.6);
+    // Hair tie
+    mk(hd,new THREE.CylinderGeometry(0.035*s,0.035*s,0.015*s,8),mat(0x1E3A5F,0.5),0,0.2*s,-0.14*s);
+    // Side bangs (asymmetric - longer on one side)
+    mk(hd,new THREE.BoxGeometry(0.03*s,0.1*s,0.02*s),mat(0x0A0A2E,0.55),-0.14*s,0.1*s,0.08*s);
+},
 mv:{l:{n:'Quick Slash',su:5,ac:3,rc:10,dm:30,hs:12,bs:9,kb:{x:.06,y:0},hb:{x:.25,y:1.3,w:.5,h:.3,d:.3}},m:{n:'Striking Tide',su:9,ac:5,rc:16,dm:65,hs:19,bs:14,kb:{x:.12,y:.02},hb:{x:.2,y:1.1,w:.8,h:.5,d:.4}},h:{n:'Water Wheel',su:15,ac:7,rc:20,dm:95,hs:24,bs:18,kb:{x:.18,y:.07},hb:{x:.15,y:.8,w:.9,h:.8,d:.5}},s1:{n:'Lull',in:'qcf',su:12,ac:6,rc:18,dm:75,hs:20,bs:16,kb:{x:.2,y:.03},hb:{x:.3,y:1.1,w:1,h:.5,d:.4},vt:'water'},s2:{n:'Dead Calm',in:'dp',su:1,ac:20,rc:35,dm:0,hs:0,bs:0,kb:{x:0,y:0},hb:{x:-.2,y:.5,w:.8,h:1,d:.6},vt:'water',cnt:1,cDm:130,cKb:{x:.3,y:.1}},su:{n:'11th Form',in:'qcf2',su:5,ac:15,rc:32,dm:210,hs:40,bs:22,kb:{x:.35,y:.08},hb:{x:.15,y:.6,w:1.5,h:.8,d:.6},vt:'water',sp:1}}},
 {name:'Rengoku',full:'Rengoku Kyojuro',alias:'Pimpo Hashakiro',type:'Aggressive',hp:1050,spd:0.08,jmp:0.23,sc:1.03,col:'#FF4500',vfx:0xFF4500,wt:'katana',spk:7,
 c3d:{skin:0xF5D0A9,hair:0xFFD700,hairTip:0xDC143C,hairEm:0xFF4500,eyes:0xFFB700,torso:0xFFFFFF,chest:0xFFFFFF,sleeve:0xFFFFFF,arm:0xFF4500,pants:0x1B1B3A,belt:0xE8E8E8,wr:0xE8E8E8,shoes:0x2A1A1A,wpn:0xDC143C,wpnEdge:0xFF6347,wpnEm:0xFF4500,wpnG:0xFFD700,hTex:mkFlameTex()},
 deco:(r,j,hd,ch,c,s)=>{[-1,1].forEach(sx=>{
-    mk(hd,new THREE.BoxGeometry(0.045*s,0.008*s,0.008*s),glowM(0xDC143C),sx*0.055*s,0.26*s,0.155*s);
-    mk(hd,new THREE.BoxGeometry(0.018*s,0.008*s,0.008*s),glowM(0xDC143C),sx*0.085*s,0.27*s,0.155*s,0,0,sx*0.4);
+    // Bifurcated eyebrows (Rengoku's signature - thick, forked shape)
+    mk(hd,new THREE.BoxGeometry(0.05*s,0.012*s,0.01*s),glowM(0xDC143C),sx*0.05*s,0.265*s,0.158*s);
+    mk(hd,new THREE.BoxGeometry(0.022*s,0.012*s,0.01*s),glowM(0xDC143C),sx*0.075*s,0.278*s,0.158*s,0,0,sx*0.5);
+    mk(hd,new THREE.BoxGeometry(0.022*s,0.012*s,0.01*s),glowM(0xDC143C),sx*0.075*s,0.253*s,0.158*s,0,0,sx*-0.3);
 })},
 mv:{l:{n:'Flame Jab',su:5,ac:3,rc:9,dm:35,hs:12,bs:8,kb:{x:.1,y:0},hb:{x:.25,y:1.3,w:.5,h:.3,d:.3}},m:{n:'Rising Sun',su:8,ac:5,rc:15,dm:70,hs:20,bs:13,kb:{x:.15,y:.06},hb:{x:.2,y:1,w:.7,h:.6,d:.4}},h:{n:'Blazing Universe',su:12,ac:7,rc:20,dm:105,hs:26,bs:17,kb:{x:.25,y:.08},hb:{x:.15,y:.8,w:1,h:.8,d:.5}},s1:{n:'Unknowing Fire',in:'qcf',su:10,ac:6,rc:20,dm:90,hs:23,bs:14,kb:{x:.3,y:.05},hb:{x:.3,y:1,w:1.2,h:.6,d:.5},vt:'fire'},s2:{n:'Flame Tiger',in:'dp',su:7,ac:8,rc:24,dm:115,hs:27,bs:12,kb:{x:.2,y:.18},hb:{x:.15,y:.6,w:.7,h:1,d:.5},vt:'fire'},su:{n:'Rengoku 9th Form',in:'qcf2',su:6,ac:12,rc:30,dm:250,hs:45,bs:25,kb:{x:.45,y:.1},hb:{x:.2,y:.6,w:1.8,h:.8,d:.6},vt:'fire',sp:1}}},
 {name:'Shinobu',full:'Shinobu Kocho',alias:'Tonho Hashira Baby',type:'Technical',hp:800,spd:0.09,jmp:0.24,sc:0.88,col:'#B57EDC',vfx:0xB57EDC,wt:'rapier',spk:0,
-c3d:{skin:0xFFF0E8,hair:0x1A0A2E,hairTip:0x6A0DAD,eyes:0x7B2D8E,torso:0xF0E6FF,chest:0x9370DB,sleeve:0x9370DB,arm:0xFF69B4,pants:0x1B1B3A,belt:0x1B1B3A,wr:0xE8E8E8,shoes:0x1B1B3A,wpn:0xB57EDC,haori:0x9370DB},
+c3d:{skin:0xFFF0E8,hair:0x1A0A2E,hairTip:0x6A0DAD,hairLong:true,eyes:0x7B2D8E,torso:0xF0E6FF,chest:0x9370DB,sleeve:0x9370DB,arm:0xFF69B4,pants:0x1B1B3A,belt:0x1B1B3A,wr:0xE8E8E8,shoes:0x1B1B3A,wpn:0xB57EDC,hTex:mkButterflyTex()},
 deco:(r,j,hd,ch,c,s)=>{
     [-1,1].forEach(sx=>{const w=new THREE.Mesh(new THREE.PlaneGeometry(0.05*s,0.035*s),new THREE.MeshBasicMaterial({color:sx<0?0x6A0DAD:0x228B22,side:THREE.DoubleSide}));w.position.set(0.15*s,0.3*s,0);w.rotation.z=sx*0.3;hd.add(w)});
 },
@@ -1480,12 +1799,46 @@ deco:(r,j,hd,ch,c,s)=>{
 },
 mv:{l:{n:'Cleaver Swipe',su:6,ac:4,rc:11,dm:38,hs:13,bs:9,kb:{x:.1,y:0},hb:{x:.2,y:1.1,w:.7,h:.4,d:.4}},m:{n:'Double Cleave',su:10,ac:6,rc:17,dm:75,hs:21,bs:15,kb:{x:.18,y:.03},hb:{x:.15,y:.9,w:.9,h:.6,d:.5}},h:{n:'Explosive Slam',su:16,ac:8,rc:24,dm:115,hs:28,bs:20,kb:{x:.25,y:.1},hb:{x:.1,y:.6,w:1,h:.9,d:.6}},s1:{n:'Sound Roar',in:'qcf',su:12,ac:8,rc:22,dm:95,hs:24,bs:16,kb:{x:.35,y:.05},hb:{x:.3,y:.8,w:1.3,h:.6,d:.5},vt:'explosion'},s2:{n:'Chain Swing',in:'dp',su:8,ac:10,rc:26,dm:100,hs:25,bs:12,kb:{x:.15,y:.18},hb:{x:.15,y:.5,w:.8,h:1,d:.5},vt:'explosion'},su:{n:'Sound Breathing Score',in:'qcf2',su:8,ac:18,rc:32,dm:260,hs:48,bs:25,kb:{x:.4,y:.12},hb:{x:.1,y:.5,w:1.6,h:1,d:.6},vt:'explosion',sp:1}}},
 {name:'Muzan',full:'Muzan Kibutsuji',type:'Boss',hp:1200,spd:0.075,jmp:0.22,sc:1.05,col:'#DC143C',vfx:0x8B0000,wt:null,spk:0,
-c3d:{skin:0xF8F0F0,hair:0x0A0A0A,eyes:0xDC143C,torso:0x0A0A0A,chest:0x111111,sleeve:0x0A0A0A,arm:0xF8F0F0,pants:0x0A0A0A,belt:0x222222,wr:0x111111,shoes:0x0A0A0A},
+c3d:{skin:0xF8F0F0,hair:0x0A0A0A,hairLong:true,eyes:0xDC143C,torso:0x0A0A0A,chest:0x111111,sleeve:0x0A0A0A,arm:0xF8F0F0,pants:0x0A0A0A,belt:0x222222,wr:0x111111,shoes:0x0A0A0A},
 deco:(r,j,hd,ch,c,s)=>{
-    mk(hd,new THREE.CylinderGeometry(0.24*s,0.24*s,0.018*s,14),mat(0xFFFFF0,0.4),0,0.33*s,0);
-    mk(hd,new THREE.CylinderGeometry(0.11*s,0.13*s,0.11*s,10),mat(0xFFFFF0,0.4),0,0.4*s,0);
-    mk(hd,new THREE.CylinderGeometry(0.135*s,0.135*s,0.018*s,10),mat(0x0A0A0A,0.5),0,0.355*s,0);
-    mk(ch,new THREE.BoxGeometry(0.025*s,0.14*s,0.008*s),mat(0xDC143C,0.5),0,0.13*s,0.13*s);
+    // White fedora hat (detailed brim + crown + band + crease)
+    const hatMat=mat(0xFFFEF0,0.3);
+    mk(hd,new THREE.CylinderGeometry(0.25*s,0.27*s,0.025*s,20),hatMat,0,0.33*s,0);
+    // Brim edge ring
+    mk(hd,new THREE.TorusGeometry(0.26*s,0.005*s,4,20),hatMat,0,0.33*s,0,Math.PI/2);
+    // Crown (tapered)
+    mk(hd,new THREE.CylinderGeometry(0.1*s,0.14*s,0.13*s,14),hatMat,0,0.41*s,0);
+    // Crown top (flat)
+    mk(hd,new THREE.CylinderGeometry(0.1*s,0.1*s,0.01*s,14),hatMat,0,0.48*s,0);
+    // Crown crease (subtle indentation)
+    mk(hd,new THREE.BoxGeometry(0.16*s,0.01*s,0.03*s),mat(0xEEEDE0,0.4),0,0.47*s,0);
+    // Hat band (black satin)
+    mk(hd,new THREE.CylinderGeometry(0.143*s,0.143*s,0.025*s,14),mat(0x0A0A0A,0.3),0,0.36*s,0);
+    // Red tie (3D with proper shape)
+    const tieMat=mat(0xDC143C,0.35);
+    // Tie knot (triangular)
+    const knotGeo=new THREE.ConeGeometry(0.015*s,0.02*s,4);
+    knotGeo.rotateX(Math.PI);
+    mk(ch,knotGeo,tieMat,0,0.22*s,0.14*s);
+    // Tie body (tapers down)
+    mk(ch,new THREE.BoxGeometry(0.025*s,0.08*s,0.008*s),tieMat,0,0.16*s,0.14*s);
+    mk(ch,new THREE.BoxGeometry(0.035*s,0.1*s,0.008*s),tieMat,0,0.06*s,0.14*s);
+    // Tie tip (pointed)
+    mk(ch,new THREE.ConeGeometry(0.018*s,0.03*s,4),tieMat,0,0.0*s,0.14*s);
+    // White dress shirt collar (curved)
+    [-1,1].forEach(sx=>{
+        const collarGeo=new THREE.BoxGeometry(0.07*s,0.05*s,0.012*s);
+        mk(ch,collarGeo,mat(0xFFFEF0,0.35),sx*0.06*s,0.25*s,0.13*s,0,0,sx*-0.35);
+    });
+    // Shirt buttons
+    for(let i=0;i<3;i++){
+        mk(ch,new THREE.SphereGeometry(0.004*s,4,4),mat(0x222222,0.5),0,(0.18-i*0.06)*s,0.145*s);
+    }
+    // Demonic red eye glow
+    [-1,1].forEach(sx=>{
+        const eyeGlow=new THREE.Mesh(new THREE.SphereGeometry(0.015*s,6,6),new THREE.MeshBasicMaterial({color:0xFF0000,transparent:true,opacity:0.2}));
+        eyeGlow.position.set(sx*0.058*s,0.2*s,0.17*s);hd.add(eyeGlow);
+    });
 },
 mv:{l:{n:'Whip Strike',su:4,ac:4,rc:10,dm:35,hs:13,bs:9,kb:{x:.12,y:0},hb:{x:.3,y:1.2,w:.7,h:.3,d:.3}},m:{n:'Tendril Lash',su:7,ac:6,rc:14,dm:65,hs:19,bs:13,kb:{x:.18,y:.02},hb:{x:.2,y:1,w:1,h:.5,d:.4}},h:{n:'Biokinetic Slam',su:13,ac:7,rc:21,dm:110,hs:27,bs:19,kb:{x:.25,y:.08},hb:{x:.15,y:.7,w:1.2,h:.8,d:.5}},s1:{n:'Black Blood Brambles',in:'qcf',su:10,ac:10,rc:22,dm:85,hs:22,bs:15,kb:{x:.2,y:.03},hb:{x:.3,y:.8,w:1.5,h:.6,d:.5},vt:'dark'},s2:{n:'Shockwave Blast',in:'dp',su:8,ac:6,rc:24,dm:100,hs:25,bs:12,kb:{x:.3,y:.15},hb:{x:0,y:.5,w:1.2,h:1,d:.6},vt:'dark'},su:{n:'Demon King Wrath',in:'qcf2',su:5,ac:20,rc:30,dm:300,hs:50,bs:28,kb:{x:.45,y:.15},hb:{x:0,y:.4,w:2,h:1,d:.7},vt:'dark',sp:1}}},
 {name:'Akaza',full:'Akaza',type:'Brawler',hp:1100,spd:0.09,jmp:0.24,sc:1.02,col:'#FF1493',vfx:0x0040FF,wt:null,spk:5,
@@ -1515,6 +1868,8 @@ class Fighter{
         this.ib=new InpBuf(30);this.lid=[];this.af=0;
         this.blk=false;this.hitA=false;this.psn=0;this.inv=0;
         this.lmd=null;this.fa=0;
+        // Combo button buffer
+        this._comboBuf=[];this._comboTimer=0;
         // Dash state
         this.dashCd=0;this.dashing=false;this.dashTimer=0;this.dashDir=0;
         this.lastFwd=0;this.lastBack=0; // double-tap detection
@@ -1535,7 +1890,23 @@ class Fighter{
         this.trail=this.ch.wt?new WeaponTrail(this.ch.vfx):null;
     }
     dir(){let dx=0,dy=0;if(hd(this.ctrl.l))dx=-1;if(hd(this.ctrl.r))dx=1;if(hd(this.ctrl.u))dy=-1;if(hd(this.ctrl.d))dy=1;return{dx,dy}}
-    btns(){const b=[];if(pr(this.ctrl.lt))b.push('l');if(pr(this.ctrl.md))b.push('m');if(pr(this.ctrl.hv))b.push('h');return b}
+    btns(){
+        // Combo buffer: collect buttons within a short window for simultaneous combos (J+K, K+L, J+K+L)
+        const newL=pr(this.ctrl.lt),newM=pr(this.ctrl.md),newH=pr(this.ctrl.hv);
+        const anyNew=newL||newM||newH;
+        if(anyNew&&this._comboTimer<=0){this._comboBuf=[];this._comboTimer=3} // start 3-frame window
+        if(this._comboTimer>0){
+            if(hd(this.ctrl.lt)&&!this._comboBuf.includes('l'))this._comboBuf.push('l');
+            if(hd(this.ctrl.md)&&!this._comboBuf.includes('m'))this._comboBuf.push('m');
+            if(hd(this.ctrl.hv)&&!this._comboBuf.includes('h'))this._comboBuf.push('h');
+            // Fire immediately if 2+ buttons detected (combo confirmed) or window expired
+            if(this._comboBuf.length>=2||--this._comboTimer===0){
+                const r=[...this._comboBuf];this._comboBuf=[];this._comboTimer=0;return r;
+            }
+            return []; // still waiting
+        }
+        return [];
+    }
     uInp(){
         const d=this.dir(),b=this.btns();
         let rd=0;
@@ -1555,7 +1926,7 @@ class Fighter{
     }
     update(opp){
         this.af++;this.sf++;
-        if(this.psn>0){this.psn--;if(this.psn%10===0)this.hp=Math.max(0,this.hp-2)}
+        if(this.psn>0&&(!NET.connected||NET.isHost)){this.psn--;if(this.psn%10===0)this.hp=Math.max(0,this.hp-2)}
         if(this.inv>0)this.inv--;
         if(this.dashCd>0)this.dashCd--;
         if(this.throwCd>0)this.throwCd--;
@@ -1606,8 +1977,8 @@ class Fighter{
                 break;
             case'throw':
                 this.mf++;
-                if(this.mf===8){
-                    // Throw connects at frame 8
+                if(this.mf===8&&(!NET.connected||NET.isHost)){
+                    // Throw connects at frame 8 (host-authoritative)
                     const dist2=Math.abs(this.x-opp.x);
                     if(dist2<0.6&&opp.st!=='hitstun'&&opp.st!=='knockdown'&&opp.st!=='throw'){
                         opp.hp=Math.max(0,opp.hp-80);
@@ -1691,14 +2062,23 @@ class Fighter{
         return false;
     }
     doAtk(inp){
+        // Motion input specials (traditional fighting game inputs)
         const sp=this.chkSp(inp.b);
         if(sp){if(sp.sp)this.sp=0;this.startM(sp);return}
-        if(inp.b.includes('h'))this.startM(this.ch.mv.h);
-        else if(inp.b.includes('m'))this.startM(this.ch.mv.m);
-        else if(inp.b.includes('l'))this.startM(this.ch.mv.l);
+        // Button combination shortcuts for specials
+        const hasL=inp.b.includes('l'),hasM=inp.b.includes('m'),hasH=inp.b.includes('h');
+        if(hasL&&hasM&&hasH&&this.ch.mv.su&&this.sp>=this.msp){this.sp=0;this.startM(this.ch.mv.su);return}
+        if(hasM&&hasH&&this.ch.mv.s2){this.startM(this.ch.mv.s2);return}
+        if(hasL&&hasM&&this.ch.mv.s1){this.startM(this.ch.mv.s1);return}
+        // Single button normal attacks
+        if(hasH)this.startM(this.ch.mv.h);
+        else if(hasM)this.startM(this.ch.mv.m);
+        else if(hasL)this.startM(this.ch.mv.l);
     }
     startM(mv){this.st='attack';this.sf=0;this.cm=mv;this.mf=0;this.hitA=false;this.lmd=mv;this.vx=0}
     chkHit(mv,opp){
+        // Guest skips hit detection - host is authoritative for all hits
+        if(NET.connected&&!NET.isHost)return;
         if(opp.inv>0)return;
         const hb=mv.hb;
         const a=new THREE.Box3(new THREE.Vector3(this.x+hb.x*this.fac-hb.w/2,this.y+hb.y-hb.h/2,-hb.d/2),new THREE.Vector3(this.x+hb.x*this.fac+hb.w/2,this.y+hb.y+hb.h/2,hb.d/2));
@@ -1753,9 +2133,9 @@ class Fighter{
     }
     uMdl(){
         this.mdl.position.x=this.x;this.mdl.position.y=this.y;this.mdl.scale.x=this.fac;
-        // Face opponent: slight Y rotation toward the other fighter
-        const facingAngle=this.fac>0?-0.35:0.35;
-        this.mdl.rotation.y+=(facingAngle-this.mdl.rotation.y)*0.12;
+        // Face opponent: strong 3/4 view rotation so characters face each other
+        const facingAngle=this.fac>0?0.92:-0.92;
+        this.mdl.rotation.y+=(facingAngle-this.mdl.rotation.y)*0.14;
         const j=this.j,t=this.af*0.05,S=this.ch.sc||1;
         const L=0.15; // lerp speed for smooth transitions
 
@@ -2030,6 +2410,44 @@ class Fighter{
             j.head.scale.lerp(new THREE.Vector3(1,1,1),0.1);
         }
 
+        // Idle breathing animation (subtle torso scale oscillation)
+        if(this.st==='idle'&&j.torso){
+            const breathe=1.0+Math.sin(t*1.2)*0.012;
+            j.torso.scale.y=breathe;
+            j.torso.scale.x=1.0-Math.sin(t*1.2)*0.006;
+        }
+
+        // Eye blink (periodic Y scale to 0 then back)
+        if(j.head){
+            // Blink every ~3-5 seconds (180-300 frames at 60fps)
+            if(this._blinkTimer==null)this._blinkTimer=180+Math.random()*120|0;
+            this._blinkTimer--;
+            if(this._blinkTimer<=0){
+                this._blinkPhase=(this._blinkPhase||0)+1;
+                if(this._blinkPhase<=3){
+                    // Closing eyes
+                    j.head.children.forEach(ch=>{
+                        if(ch.material&&ch.material.color){
+                            const c=ch.material.color;
+                            // Target eye meshes by position (z > 0.13 = front of face, y ~ 0.2 = eye height)
+                            if(ch.position.z>0.13*S&&Math.abs(ch.position.y-0.2*S)<0.03*S){
+                                ch.scale.y=this._blinkPhase<=1?0.3:this._blinkPhase<=2?0.05:0.3;
+                            }
+                        }
+                    });
+                }else{
+                    // Reset blink
+                    j.head.children.forEach(ch=>{
+                        if(ch.position.z>0.13*S&&Math.abs(ch.position.y-0.2*S)<0.03*S){
+                            ch.scale.y=1;
+                        }
+                    });
+                    this._blinkPhase=0;
+                    this._blinkTimer=180+Math.random()*120|0;
+                }
+            }
+        }
+
         // Haori cloth sim (enhanced with velocity and wind)
         const haori=this.mdl.userData.ms?.haori;
         if(haori&&haori.geometry){
@@ -2225,11 +2643,11 @@ function updateSuperCinematic(){
             // Restore
             letterboxTop.style.height='0';
             letterboxBot.style.height='0';
-            superZoomTarget=38;
-            bloom.strength=0.25;
+            superZoomTarget=36;
+            bloom.strength=0.3;
         }
-    }else if(Math.abs(cam.fov-38)>0.5){
-        cam.fov+=(38-cam.fov)*0.1;
+    }else if(Math.abs(cam.fov-36)>0.5){
+        cam.fov+=(36-cam.fov)*0.1;
         cam.updateProjectionMatrix();
     }
 }
@@ -2352,49 +2770,78 @@ function spVfx(pos,type,col){
     const addVfx=(o,life,vt)=>{o.userData.vF=0;o.userData.vL=life;o.userData.vT=vt;scene.add(o);vfxO.push(o)};
     switch(type){
         case'water':{
-            // Inner bright ring + outer expanding ring + droplets
-            const inner=new THREE.Mesh(new THREE.TorusGeometry(0.25,0.06,8,20),new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.8,blending:THREE.AdditiveBlending,depthWrite:false}));
+            // Inner bright ring + outer expanding ring + spray droplets + wave arc
+            const inner=new THREE.Mesh(new THREE.TorusGeometry(0.25,0.06,8,24),new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.85,blending:THREE.AdditiveBlending,depthWrite:false}));
             inner.position.copy(pos);addVfx(inner,18,'expand');
-            const outer=new THREE.Mesh(new THREE.TorusGeometry(0.4,0.08,8,24),new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.6,blending:THREE.AdditiveBlending,depthWrite:false}));
+            const outer=new THREE.Mesh(new THREE.TorusGeometry(0.4,0.08,8,28),new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.6,blending:THREE.AdditiveBlending,depthWrite:false}));
             outer.position.copy(pos);addVfx(outer,26,'expand');
-            // Water droplets
-            for(let i=0;i<6;i++){
-                const drop=new THREE.Mesh(new THREE.SphereGeometry(0.03,6,6),new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.7,blending:THREE.AdditiveBlending,depthWrite:false}));
+            // Water wave arc (anime-style crescent)
+            const wave=new THREE.Mesh(new THREE.TorusGeometry(0.5,0.03,6,20,Math.PI*0.8),new THREE.MeshBasicMaterial({color:0x88DDFF,transparent:true,opacity:0.5,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
+            wave.position.copy(pos);wave.rotation.set(Math.random()*0.5,Math.random()*Math.PI,Math.random()*0.5);addVfx(wave,22,'expand');
+            // Water droplets (more, varied sizes)
+            for(let i=0;i<10;i++){
+                const sz=0.015+Math.random()*0.025;
+                const drop=new THREE.Mesh(new THREE.SphereGeometry(sz,6,6),new THREE.MeshBasicMaterial({color:i%3===0?0xFFFFFF:col,transparent:true,opacity:0.7,blending:THREE.AdditiveBlending,depthWrite:false}));
                 drop.position.copy(pos);
-                drop.userData.sparkVx=(Math.random()-0.5)*0.06;drop.userData.sparkVy=0.03+Math.random()*0.04;drop.userData.sparkVz=(Math.random()-0.5)*0.04;
-                addVfx(drop,20,'spark');
+                drop.userData.sparkVx=(Math.random()-0.5)*0.08;drop.userData.sparkVy=0.02+Math.random()*0.06;drop.userData.sparkVz=(Math.random()-0.5)*0.05;
+                addVfx(drop,24,'spark');
             }
+            // Mist glow around impact
+            const mist=new THREE.Mesh(new THREE.SphereGeometry(0.6,8,8),new THREE.MeshBasicMaterial({color:0x88CCFF,transparent:true,opacity:0.15,blending:THREE.AdditiveBlending,depthWrite:false}));
+            mist.position.copy(pos);addVfx(mist,20,'expand');
             break;}
         case'fire':{
-            // Core white-yellow + outer orange-red + embers + light
-            const core=new THREE.Mesh(new THREE.SphereGeometry(0.2,12,12),new THREE.MeshBasicMaterial({color:0xFFFF88,transparent:true,opacity:0.9,blending:THREE.AdditiveBlending,depthWrite:false}));
-            core.position.copy(pos);addVfx(core,20,'fire');
-            const outer=new THREE.Mesh(new THREE.SphereGeometry(0.4,12,12),new THREE.MeshBasicMaterial({color:0xFF4500,transparent:true,opacity:0.5,blending:THREE.AdditiveBlending,depthWrite:false}));
+            // Core white-hot + inner yellow + outer orange-red + embers + pillar + light
+            const core=new THREE.Mesh(new THREE.SphereGeometry(0.15,12,12),new THREE.MeshBasicMaterial({color:0xFFFFCC,transparent:true,opacity:0.95,blending:THREE.AdditiveBlending,depthWrite:false}));
+            core.position.copy(pos);addVfx(core,16,'fire');
+            const mid=new THREE.Mesh(new THREE.SphereGeometry(0.3,12,12),new THREE.MeshBasicMaterial({color:0xFFAA00,transparent:true,opacity:0.6,blending:THREE.AdditiveBlending,depthWrite:false}));
+            mid.position.copy(pos);addVfx(mid,22,'fire');
+            const outer=new THREE.Mesh(new THREE.SphereGeometry(0.5,12,12),new THREE.MeshBasicMaterial({color:0xFF4500,transparent:true,opacity:0.35,blending:THREE.AdditiveBlending,depthWrite:false}));
             outer.position.copy(pos);addVfx(outer,28,'fire');
-            const fl=new THREE.PointLight(0xFF4500,25,8);fl.decay=0;fl.position.copy(pos);scene.add(fl);outer.userData.lt=fl;
-            // Embers
-            for(let i=0;i<8;i++){
-                const ember=new THREE.Mesh(new THREE.SphereGeometry(0.015,4,4),new THREE.MeshBasicMaterial({color:0xFFAA00,transparent:true,opacity:0.9,blending:THREE.AdditiveBlending,depthWrite:false}));
+            // Fire pillar (rising column of flame)
+            const pillar=new THREE.Mesh(new THREE.CylinderGeometry(0.08,0.2,0.8,8),new THREE.MeshBasicMaterial({color:0xFF6600,transparent:true,opacity:0.4,blending:THREE.AdditiveBlending,depthWrite:false}));
+            pillar.position.set(pos.x,pos.y+0.3,pos.z);addVfx(pillar,24,'fire');
+            const fl=new THREE.PointLight(0xFF4500,30,10);fl.decay=0;fl.position.copy(pos);scene.add(fl);outer.userData.lt=fl;
+            // Embers (more, rising higher)
+            for(let i=0;i<12;i++){
+                const ember=new THREE.Mesh(new THREE.SphereGeometry(0.01+Math.random()*0.012,4,4),new THREE.MeshBasicMaterial({color:i%3===0?0xFFFF88:0xFFAA00,transparent:true,opacity:0.9,blending:THREE.AdditiveBlending,depthWrite:false}));
                 ember.position.copy(pos);
-                ember.userData.sparkVx=(Math.random()-0.5)*0.04;ember.userData.sparkVy=0.02+Math.random()*0.05;ember.userData.sparkVz=(Math.random()-0.5)*0.03;
-                addVfx(ember,22,'spark');
+                ember.userData.sparkVx=(Math.random()-0.5)*0.05;ember.userData.sparkVy=0.03+Math.random()*0.07;ember.userData.sparkVz=(Math.random()-0.5)*0.04;
+                addVfx(ember,26,'spark');
             }
             break;}
         case'lightning':{
-            // Multiple branching bolts + sparks at tips
-            for(let b=0;b<3;b++){
+            // Multiple branching bolts with sub-branches + sparks + glow core + flash
+            for(let b=0;b<5;b++){
                 const pts=[];let lx=pos.x,ly=pos.y,lz=pos.z;
-                for(let i=0;i<10;i++){pts.push(new THREE.Vector3(lx,ly,lz));lx+=(Math.random()-0.3)*0.3;ly+=(Math.random()-0.5)*0.25;lz+=(Math.random()-0.5)*0.12}
-                const bolt=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color:b===0?0xFFFFFF:0xFFD700,linewidth:2}));
-                addVfx(bolt,12+b*3,'fade');
+                const segs=8+Math.floor(Math.random()*6);
+                for(let i=0;i<segs;i++){pts.push(new THREE.Vector3(lx,ly,lz));lx+=(Math.random()-0.3)*0.35;ly+=(Math.random()-0.5)*0.3;lz+=(Math.random()-0.5)*0.15}
+                const bolt=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color:b===0?0xFFFFFF:b<3?0xFFD700:0xFFEE88,linewidth:2}));
+                addVfx(bolt,10+b*3,'fade');
+                // Sub-branches from random bolt points
+                if(b<2){
+                    for(let sb=0;sb<2;sb++){
+                        const si=Math.floor(Math.random()*pts.length);
+                        const sp2=pts[si]||pts[0];
+                        const bpts=[sp2.clone()];
+                        for(let i=0;i<4;i++){bpts.push(new THREE.Vector3(sp2.x+(Math.random()-0.5)*0.3,sp2.y+(Math.random()-0.5)*0.25,sp2.z+(Math.random()-0.5)*0.1))}
+                        const subBolt=new THREE.Line(new THREE.BufferGeometry().setFromPoints(bpts),new THREE.LineBasicMaterial({color:0xFFEE44}));
+                        addVfx(subBolt,8,'fade');
+                    }
+                }
             }
-            // Spark spheres at endpoints
-            for(let i=0;i<4;i++){
-                const sp=new THREE.Mesh(new THREE.SphereGeometry(0.04,6,6),new THREE.MeshBasicMaterial({color:0xFFFF88,transparent:true,opacity:0.8,blending:THREE.AdditiveBlending,depthWrite:false}));
-                sp.position.set(pos.x+(Math.random()-0.5)*0.4,pos.y+(Math.random()-0.5)*0.3,pos.z);
-                addVfx(sp,10,'expand');
+            // Spark spheres at endpoints (more)
+            for(let i=0;i<6;i++){
+                const sp=new THREE.Mesh(new THREE.SphereGeometry(0.03+Math.random()*0.03,6,6),new THREE.MeshBasicMaterial({color:i%2===0?0xFFFF88:0xFFD700,transparent:true,opacity:0.85,blending:THREE.AdditiveBlending,depthWrite:false}));
+                sp.position.set(pos.x+(Math.random()-0.5)*0.5,pos.y+(Math.random()-0.5)*0.4,pos.z);
+                addVfx(sp,12,'expand');
             }
-            screenFlash('#ffffcc',2);
+            // Central glow sphere
+            const glow=new THREE.Mesh(new THREE.SphereGeometry(0.35,8,8),new THREE.MeshBasicMaterial({color:0xFFFF44,transparent:true,opacity:0.3,blending:THREE.AdditiveBlending,depthWrite:false}));
+            glow.position.copy(pos);addVfx(glow,14,'expand');
+            // Dynamic light
+            const ltL=new THREE.PointLight(0xFFDD00,20,8);ltL.decay=0;ltL.position.copy(pos);scene.add(ltL);glow.userData.lt=ltL;
+            screenFlash('#ffffcc',3);
             break;}
         case'blood':{
             const core=new THREE.Mesh(new THREE.SphereGeometry(0.25,10,10),new THREE.MeshBasicMaterial({color:0xFF1493,transparent:true,opacity:0.7,blending:THREE.AdditiveBlending,depthWrite:false}));
@@ -2478,9 +2925,9 @@ function uVfx(){
 let camShk=0;const camTgt=new THREE.Vector3();
 function uCam(){
     if(!p1||!p2)return;
-    const mx=(p1.x+p2.x)/2,my=Math.max(p1.y,p2.y)*0.5+1.2;
-    const d=Math.abs(p1.x-p2.x),z=Math.max(8.5,6.5+d*0.7);
-    camTgt.set(mx,my,z);cam.position.lerp(camTgt,0.07);cam.lookAt(mx,my-0.25,0);
+    const mx=(p1.x+p2.x)/2,my=Math.max(p1.y,p2.y)*0.5+1.15;
+    const d=Math.abs(p1.x-p2.x),z=Math.max(8.0,6.0+d*0.65);
+    camTgt.set(mx,my,z);cam.position.lerp(camTgt,0.07);cam.lookAt(mx,my-0.2,0);
     if(camShk>0){cam.position.x+=(Math.random()-0.5)*camShk;cam.position.y+=(Math.random()-0.5)*camShk;camShk*=0.84;if(camShk<0.002)camShk=0}
 }
 
@@ -2821,7 +3268,7 @@ function updateVictoryPose(){
     }
     if(victoryPoseTimer<=0){
         letterboxTop.style.height='0';letterboxBot.style.height='0';
-        superZoomTarget=38;
+        superZoomTarget=36;
     }
 }
 
@@ -2838,9 +3285,9 @@ function showMoveList(charIdx){
     html+=`<div style="color:#888;margin-bottom:12px">${ch.type} | HP: ${ch.hp}</div>`;
     html+=`<table style="width:100%;border-collapse:collapse">`;
     html+=`<tr style="color:#FFD700;border-bottom:1px solid #333"><td>Move</td><td>Input</td><td>S/A/R</td><td>Dmg</td><td>Adv</td></tr>`;
-    const inputNames={l:'J',m:'K',h:'L',s1:'↓↘→+Btn',s2:'→↓↘+Btn',su:'↓↘→×2+Btn'};
+    const inputNames={l:'J',m:'K',h:'L',s1:'J+K or ↓↘→+Btn',s2:'K+L or →↓↘+Btn',su:'J+K+L or ↓↘→×2+Btn'};
     Object.entries(ch.mv).forEach(([key,mv])=>{
-        const inp=key==='l'?'J':key==='m'?'K':key==='h'?'L':key==='s1'?'↓↘→+J':key==='s2'?'→↓↘+J':'↓↘→×2+J';
+        const inp=key==='l'?'J':key==='m'?'K':key==='h'?'L':key==='s1'?'J+K':key==='s2'?'K+L':'J+K+L';
         const adv=mv.hs-(mv.su+mv.ac+mv.rc);
         const advCol=adv>=0?'#0f0':'#f00';
         html+=`<tr style="border-bottom:1px solid #1a1a1a"><td style="color:#fff">${mv.n}</td><td style="color:#aaa">${inp}</td><td>${mv.su}/${mv.ac}/${mv.rc}</td><td>${mv.dm}</td><td style="color:${advCol}">${adv>=0?'+':''}${adv}</td></tr>`;
@@ -3010,6 +3457,9 @@ function netSetupConn(){
     NET.conn.on('data',data=>{
         if(data.type==='input'){
             NET.remoteInput=data.keys;
+        }else if(data.type==='state'){
+            // Host-authoritative state sync: guest applies host's game state
+            if(!NET.isHost)netApplyGameState(data);
         }else if(data.type==='selP1'){
             // Host confirmed P1 selection, guest can now pick P2
             selP1=data.char;sPh=1;sCur=selP1===9?0:9;
@@ -3103,6 +3553,95 @@ function netApplyInputs(){
 function netSendStart(p1,p2,stage){
     if(!NET.conn||!NET.connected)return;
     try{NET.conn.send({type:'start',p1,p2,stage})}catch(e){}
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// HOST-AUTHORITATIVE STATE SYNC
+// Host sends full game state every frame, guest applies it.
+// This prevents desync from input latency causing divergent simulations.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+function netExtractFighterState(f){
+    if(!f)return null;
+    return{
+        x:Math.round(f.x*1000)/1000,
+        y:Math.round(f.y*1000)/1000,
+        vx:Math.round(f.vx*1000)/1000,
+        vy:Math.round(f.vy*1000)/1000,
+        hp:f.hp,sp:Math.round(f.sp*10)/10,
+        st:f.st,sf:f.sf,mf:f.mf,
+        fac:f.fac,
+        cm:f.cm?f.cm.n:null,
+        hs:f.hs,bs:f.bs,
+        inv:f.inv,
+        combo:f.combo,comboS:f.comboS,
+        grounded:f.y<=0
+    };
+}
+
+function netSendState(){
+    if(!NET.conn||!NET.connected||!NET.isHost)return;
+    if(!p1||!p2)return;
+    try{NET.conn.send({
+        type:'state',
+        p1s:netExtractFighterState(p1),
+        p2s:netExtractFighterState(p2),
+        rt:rTimer,
+        gs:gs,w1:w1,w2:w2,rn:rNum
+    })}catch(e){}
+}
+
+function netApplyFighterState(f,s){
+    if(!f||!s)return;
+    // Snap position/velocity from host (authoritative)
+    f.x=s.x;f.y=s.y;f.vx=s.vx;f.vy=s.vy;
+    // Snap game-critical state
+    f.hp=s.hp;f.sp=s.sp;
+    f.st=s.st;f.sf=s.sf;f.mf=s.mf;
+    f.fac=s.fac;
+    f.hs=s.hs;f.bs=s.bs;
+    f.inv=s.inv;
+    f.combo=s.combo;f.comboS=s.comboS;
+    // Resolve current move by name
+    if(s.cm&&f.ch&&f.ch.mv){
+        const mv=f.ch.mv;
+        f.cm=Object.values(mv).find(m=>m.n===s.cm)||null;
+    }else if(!s.cm){
+        f.cm=null;
+    }
+    // Update model position
+    if(f.mdl){
+        f.mdl.position.x=f.x;f.mdl.position.y=f.y;
+        f.mdl.scale.x=f.fac;
+    }
+}
+
+function netApplyGameState(data){
+    if(!p1||!p2)return;
+    netApplyFighterState(p1,data.p1s);
+    netApplyFighterState(p2,data.p2s);
+    rTimer=data.rt;
+    w1=data.w1;w2=data.w2;
+    // Handle game state transitions from host
+    if(data.gs!==gs){
+        if(data.gs===GS.REND&&gs===GS.FIGHT){
+            // Round ended on host
+            gs=GS.REND;reTimer=120;
+            const winName=(p1.hp<=0?CH[selP2].name:CH[selP1].name).toUpperCase();
+            announce(winName+' WINS','Round '+rNum,2000);
+            startVictoryPose(p1.hp>0?p1:p2);
+        }else if(data.gs===GS.MEND&&gs===GS.FIGHT){
+            // Match ended on host
+            gs=GS.MEND;meTimer=240;
+            const winnerName=(data.w1>=2?CH[selP1].name:CH[selP2].name).toUpperCase();
+            announce(winnerName+' WINS!','Match Over',4000);
+            startVictoryPose(data.w1>=2?p1:p2);
+        }else if(data.gs===GS.FIGHT&&gs===GS.REND){
+            // New round started on host
+            rNum=data.rn;
+            const tw1=w1,tw2=w2;initFight();w1=tw1;w2=tw2;gs=GS.FIGHT;
+        }
+    }
 }
 
 function netDisconnect(){
@@ -3339,11 +3878,26 @@ function loop(ts){
                 if(sloMo>0){sloMo--;break}
                 rep.rf();
                 if(aiController&&!tr.on)aiController.update(p1);
-                // Online: capture local input, send it, then apply both sides
-                if(NET.connected){netCaptureLocal();netSendInput();netApplyInputs()}
-                p1.update(p2);p2.update(p1);tr.upd(p1,p2);
+                // Online: host-authoritative model
+                if(NET.connected){
+                    netCaptureLocal();netSendInput();netApplyInputs();
+                    if(NET.isHost){
+                        // HOST: run simulation normally, then send authoritative state to guest
+                        p1.update(p2);p2.update(p1);tr.upd(p1,p2);
+                        netSendState();
+                    }else{
+                        // GUEST: run pose/animation update only (state comes from host via netApplyGameState)
+                        // Call update for animation/rendering but state is overwritten by host
+                        p1.update(p2);p2.update(p1);
+                        // Guest does NOT handle round/match end - host sends state transitions
+                    }
+                }else{
+                    // Local play: run simulation normally
+                    p1.update(p2);p2.update(p1);tr.upd(p1,p2);
+                }
                 if(tr.hb){p1.drawHB();p2.drawHB()}else{p1.rmHB();p2.rmHB()}
-                if(!tr.on){rTimer--;if(rTimer<=0||p1.hp<=0||p2.hp<=0){
+                // Round/match end: only process locally (offline) or on host (online)
+                if(!tr.on&&(!NET.connected||NET.isHost)){rTimer--;if(rTimer<=0||p1.hp<=0||p2.hp<=0){
                     if(p1.hp<=0)w2++;else if(p2.hp<=0)w1++;else if(p1.hp>p2.hp)w1++;else w2++;
                     SFX.ko();
                     if(w1>=2||w2>=2){
@@ -3351,16 +3905,24 @@ function loop(ts){
                         const winnerName=(w1>=2?CH[selP1].name:CH[selP2].name).toUpperCase();
                         announce(winnerName+' WINS!','Match Over',4000);
                         startVictoryPose(w1>=2?p1:p2);
+                        if(NET.connected)netSendState(); // send final state with GS.MEND
                     }else{
                         gs=GS.REND;reTimer=120;
                         announce((p1.hp<=0?CH[selP2].name:CH[selP1].name).toUpperCase()+' WINS','Round '+rNum,2000);
                         startVictoryPose(p1.hp>0?p1:p2);
+                        if(NET.connected)netSendState(); // send state with GS.REND
                     }
                 }}break;
             case GS.REND:
                 updateVictoryPose();
-                reTimer--;
-                if(reTimer<=0){const tw1=w1,tw2=w2;rNum++;initFight();w1=tw1;w2=tw2;gs=GS.FIGHT}
+                // Only host controls round transition timing in online mode
+                if(!NET.connected||NET.isHost){
+                    reTimer--;
+                    if(reTimer<=0){
+                        const tw1=w1,tw2=w2;rNum++;initFight();w1=tw1;w2=tw2;gs=GS.FIGHT;
+                        if(NET.connected)netSendState(); // notify guest of new round
+                    }
+                }
                 break;
             case GS.MEND:
                 updateVictoryPose();
