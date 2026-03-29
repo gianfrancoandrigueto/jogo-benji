@@ -3419,7 +3419,8 @@ function netCreateRoom(){
     });
     NET.peer.on('connection',conn=>{
         NET.conn=conn;
-        netSetupConn();
+        // Must wait for 'open' before data can flow - PeerJS drops messages sent before open
+        conn.on('open',()=>netSetupConn());
     });
     NET.peer.on('error',err=>{
         if(err.type==='unavailable-id'){
@@ -3520,8 +3521,7 @@ function netCaptureLocal(){
 }
 
 function netSendInput(){
-    if(!NET.conn||!NET.connected)return;
-    // Send the captured raw local snapshot (not current K which may be remapped)
+    if(!NET.conn||!NET.connected||!NET.conn.open)return;
     try{NET.conn.send({type:'input',keys:netLocalSnapshot})}catch(e){}
 }
 
@@ -3558,7 +3558,7 @@ function netApplyInputs(){
 }
 
 function netSendStart(p1,p2,stage){
-    if(!NET.conn||!NET.connected)return;
+    if(!NET.conn||!NET.connected||!NET.conn.open)return;
     try{NET.conn.send({type:'start',p1,p2,stage})}catch(e){}
 }
 
@@ -3595,7 +3595,7 @@ function netExtractFighterState(f){
 }
 
 function netSendState(){
-    if(!NET.conn||!NET.connected||!NET.isHost)return;
+    if(!NET.conn||!NET.connected||!NET.isHost||!NET.conn.open)return;
     if(!p1||!p2)return;
     try{NET.conn.send({
         type:'state',
