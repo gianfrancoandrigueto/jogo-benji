@@ -283,8 +283,14 @@ let sloMo=0,fc=0,paused=false,fStep=false;
 // INPUT
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const K={},KP={};
-document.addEventListener('keydown',e=>{K[e.code]=true;e.preventDefault()});
-document.addEventListener('keyup',e=>{K[e.code]=false;e.preventDefault()});
+document.addEventListener('keydown',e=>{
+    if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')return;
+    K[e.code]=true;e.preventDefault();
+});
+document.addEventListener('keyup',e=>{
+    if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')return;
+    K[e.code]=false;e.preventDefault();
+});
 const pr=c=>K[c]&&!KP[c],hd=c=>!!K[c];
 
 class InpBuf{
