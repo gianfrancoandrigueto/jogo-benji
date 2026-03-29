@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>DEMON SLAYER - 3D Pro Fighter</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -93,6 +93,48 @@ canvas{display:block;width:100vw;height:100vh}
 #rec{position:absolute;top:72px;right:14px;font:12px monospace;display:none;z-index:10;align-items:center;gap:5px}
 #rec .rd{width:10px;height:10px;background:#f00;border-radius:50%;animation:bk 1s infinite}
 @keyframes bk{0%,100%{opacity:1}50%{opacity:.2}}
+
+/* === MOBILE TOUCH CONTROLS === */
+#touch-controls{display:none;position:fixed;bottom:0;left:0;width:100%;height:45%;z-index:25;pointer-events:none;user-select:none;-webkit-user-select:none;touch-action:none}
+@media(pointer:coarse),(max-width:900px){
+    #touch-controls{display:block}
+    .mc,.sh{font-size:9px!important}
+    .hbar{padding:8px 12px!important}
+    .pn{font-size:10px!important}
+    .hbo{height:16px!important}
+    #timer{font-size:24px!important;width:46px!important;height:46px!important;top:2px!important}
+    #rnd{top:50px!important;font-size:8px!important}
+    .combo .n{font-size:28px!important}
+    .combo{bottom:180px!important}
+    .cg{grid-template-columns:repeat(5,1fr)!important;gap:4px!important;max-width:100%!important}
+    .cc{padding:6px 4px!important}
+    .cc .cn{font-size:10px!important}
+    .cp{padding:8px!important;font-size:11px!important}
+    .mo{padding:10px 20px!important;font-size:14px!important}
+    .mt{font-size:32px!important}
+    .ms{font-size:14px!important}
+}
+#touch-joy{position:absolute;bottom:30px;left:24px;width:140px;height:140px;pointer-events:auto;touch-action:none}
+#joy-base{width:140px;height:140px;border-radius:50%;background:rgba(255,255,255,.08);border:2px solid rgba(255,255,255,.15);position:relative}
+#joy-knob{width:56px;height:56px;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.35),rgba(255,255,255,.12));border:2px solid rgba(255,255,255,.25);position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none;transition:none}
+#touch-btns{position:absolute;bottom:24px;right:16px;pointer-events:auto;touch-action:none}
+.tbtn{width:58px;height:58px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:13px;color:rgba(255,255,255,.85);position:absolute;border:2px solid rgba(255,255,255,.18);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);text-shadow:0 1px 4px rgba(0,0,0,.6);transition:transform .06s,background .06s}
+.tbtn:active,.tbtn.pressed{transform:scale(.88);background:rgba(255,255,255,.25)!important}
+#btn-l{background:rgba(0,180,255,.2);bottom:65px;right:130px}
+#btn-m{background:rgba(255,200,0,.2);bottom:110px;right:65px}
+#btn-h{background:rgba(255,50,50,.2);bottom:65px;right:0px}
+#btn-sp{background:rgba(180,0,255,.22);bottom:0px;right:65px;width:62px;height:62px;font-size:11px;border-color:rgba(180,100,255,.3)}
+#touch-menu-btns{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);z-index:26;display:none;gap:12px;pointer-events:auto;touch-action:none}
+@media(pointer:coarse),(max-width:900px){#touch-menu-btns{display:flex}}
+.tmbtn{padding:10px 22px;border-radius:8px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);color:#fff;font-weight:700;font-size:13px;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.tmbtn:active{background:rgba(255,255,255,.25)}
+#touch-dpad{position:absolute;bottom:30px;left:24px;width:140px;height:140px;pointer-events:auto;touch-action:none;display:none}
+.dpad-btn{position:absolute;width:46px;height:46px;border-radius:8px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;font-size:18px;color:rgba(255,255,255,.6)}
+.dpad-btn:active{background:rgba(255,255,255,.25)}
+#dpad-u{top:0;left:47px}
+#dpad-d{bottom:0;left:47px}
+#dpad-l{top:47px;left:0}
+#dpad-r{top:47px;right:0}
 </style>
 </head>
 <body>
@@ -145,6 +187,26 @@ canvas{display:block;width:100vw;height:100vh}
 <!-- Pause -->
 <div id="pau"><div><div class="pt">PAUSED</div><div class="ph">] = Frame Step &nbsp;|&nbsp; P = Resume &nbsp;|&nbsp; M = Move List</div></div></div>
 
+<!-- Mobile Touch Controls -->
+<div id="touch-controls">
+ <div id="touch-joy"><div id="joy-base"><div id="joy-knob"></div></div></div>
+ <div id="touch-btns">
+  <div class="tbtn" id="btn-l">L</div>
+  <div class="tbtn" id="btn-m">M</div>
+  <div class="tbtn" id="btn-h">H</div>
+  <div class="tbtn" id="btn-sp">SP</div>
+ </div>
+</div>
+<!-- Mobile Menu Navigation -->
+<div id="touch-menu-btns">
+ <div class="tmbtn" id="tm-up">&#9650;</div>
+ <div class="tmbtn" id="tm-down">&#9660;</div>
+ <div class="tmbtn" id="tm-left">&#9664;</div>
+ <div class="tmbtn" id="tm-right">&#9654;</div>
+ <div class="tmbtn" id="tm-confirm" style="background:rgba(255,215,0,.2);border-color:rgba(255,215,0,.3);color:#FFD700">OK</div>
+ <div class="tmbtn" id="tm-back" style="background:rgba(255,50,50,.15);border-color:rgba(255,50,50,.2);color:#f88">Back</div>
+</div>
+
 <script type="importmap">
 {"imports":{"three":"https://unpkg.com/three@0.171.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.171.0/examples/jsm/"}}
 </script>
@@ -194,6 +256,157 @@ class InpBuf{
         }
         return false;
     }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// MOBILE TOUCH INPUT SYSTEM
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const isMobile='ontouchstart'in window||navigator.maxTouchPoints>0||matchMedia('(pointer:coarse)').matches;
+
+// Virtual joystick
+(function initTouch(){
+    if(!isMobile)return;
+    const joy=document.getElementById('touch-joy');
+    const knob=document.getElementById('joy-knob');
+    const base=document.getElementById('joy-base');
+    let joyActive=false,joyId=null;
+    const joyR=60; // max radius knob can travel
+
+    function joyMove(cx,cy){
+        const rect=base.getBoundingClientRect();
+        const bx=rect.left+rect.width/2, by=rect.top+rect.height/2;
+        let dx=cx-bx, dy=cy-by;
+        const dist=Math.sqrt(dx*dx+dy*dy);
+        if(dist>joyR){dx=dx/dist*joyR;dy=dy/dist*joyR}
+        knob.style.transform=`translate(${dx-28}px,${dy-28}px)`;
+        // Map to WASD keys
+        const deadzone=18;
+        K['KeyA']=dx<-deadzone;
+        K['KeyD']=dx>deadzone;
+        K['KeyW']=dy<-deadzone;
+        K['KeyS']=dy>deadzone;
+    }
+    function joyEnd(){
+        joyActive=false;joyId=null;
+        knob.style.transform='translate(-50%,-50%)';
+        K['KeyA']=false;K['KeyD']=false;K['KeyW']=false;K['KeyS']=false;
+    }
+
+    joy.addEventListener('touchstart',e=>{
+        e.preventDefault();
+        const t=e.changedTouches[0];
+        joyActive=true;joyId=t.identifier;
+        joyMove(t.clientX,t.clientY);
+    },{passive:false});
+    document.addEventListener('touchmove',e=>{
+        for(const t of e.changedTouches){
+            if(t.identifier===joyId&&joyActive){joyMove(t.clientX,t.clientY);break}
+        }
+    },{passive:true});
+    document.addEventListener('touchend',e=>{
+        for(const t of e.changedTouches){
+            if(t.identifier===joyId){joyEnd();break}
+        }
+    },{passive:true});
+    document.addEventListener('touchcancel',e=>{
+        for(const t of e.changedTouches){
+            if(t.identifier===joyId){joyEnd();break}
+        }
+    },{passive:true});
+
+    // Attack buttons -> map to P1 keys (J=light, K=medium, L=heavy)
+    const btnMap={
+        'btn-l':'KeyJ',
+        'btn-m':'KeyK',
+        'btn-h':'KeyL',
+        'btn-sp':'_special' // special macro: qcf + light
+    };
+    const activeTouches=new Map(); // touchId -> keyCode
+
+    document.getElementById('touch-btns').addEventListener('touchstart',e=>{
+        e.preventDefault();
+        for(const t of e.changedTouches){
+            const el=document.elementFromPoint(t.clientX,t.clientY);
+            if(!el)continue;
+            const btn=el.closest('.tbtn');
+            if(!btn)continue;
+            btn.classList.add('pressed');
+            const keyCode=btnMap[btn.id];
+            if(keyCode==='_special'){
+                // Super macro: simulate qcf motion + light attack
+                // Down, Down-Forward, Forward + Light
+                K['KeyS']=true;
+                setTimeout(()=>{K['KeyS']=false;K['KeyD']=true;setTimeout(()=>{K['KeyJ']=true;setTimeout(()=>{K['KeyD']=false;K['KeyJ']=false},80)},50)},50);
+                activeTouches.set(t.identifier,{btn,key:null});
+            }else if(keyCode){
+                K[keyCode]=true;
+                activeTouches.set(t.identifier,{btn,key:keyCode});
+            }
+        }
+    },{passive:false});
+
+    function btnRelease(touchId){
+        const info=activeTouches.get(touchId);
+        if(!info)return;
+        info.btn.classList.remove('pressed');
+        if(info.key)K[info.key]=false;
+        activeTouches.delete(touchId);
+    }
+    document.addEventListener('touchend',e=>{
+        for(const t of e.changedTouches)btnRelease(t.identifier);
+    },{passive:true});
+    document.addEventListener('touchcancel',e=>{
+        for(const t of e.changedTouches)btnRelease(t.identifier);
+    },{passive:true});
+
+    // Menu navigation buttons
+    const menuMap={
+        'tm-up':'KeyW','tm-down':'KeyS','tm-left':'KeyA','tm-right':'KeyD',
+        'tm-confirm':'KeyJ','tm-back':'KeyK'
+    };
+    document.getElementById('touch-menu-btns').addEventListener('touchstart',e=>{
+        e.preventDefault();
+        const el=e.target.closest('.tmbtn');
+        if(!el)return;
+        const kc=menuMap[el.id];
+        if(kc){K[kc]=true;setTimeout(()=>{K[kc]=false},100)}
+    },{passive:false});
+
+    // Prevent default touch behaviors on canvas to avoid scrolling/zooming
+    document.getElementById('gc').addEventListener('touchstart',e=>e.preventDefault(),{passive:false});
+    document.getElementById('gc').addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
+
+    // Prevent zoom on double-tap
+    let lastTap=0;
+    document.addEventListener('touchend',e=>{
+        const now=Date.now();
+        if(now-lastTap<300)e.preventDefault();
+        lastTap=now;
+    },{passive:false});
+
+    // Prevent pinch-zoom
+    document.addEventListener('gesturestart',e=>e.preventDefault(),{passive:false});
+
+    // Show/hide touch controls based on game state
+    const tc=document.getElementById('touch-controls');
+    const tmb=document.getElementById('touch-menu-btns');
+    function updateTouchVisibility(){
+        if(!isMobile)return;
+        const inFight=gs===GS.FIGHT||gs===GS.REND||gs===GS.MEND;
+        tc.style.display=inFight?'block':'none';
+        tmb.style.display=inFight?'none':'flex';
+    }
+    // Check visibility periodically
+    setInterval(updateTouchVisibility,200);
+})();
+
+// Fullscreen on mobile tap (better experience)
+if(isMobile){
+    document.addEventListener('touchstart',function fs(){
+        if(document.documentElement.requestFullscreen)document.documentElement.requestFullscreen().catch(()=>{});
+        else if(document.documentElement.webkitRequestFullscreen)document.documentElement.webkitRequestFullscreen();
+        document.removeEventListener('touchstart',fs);
+    },{once:true,passive:true});
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
